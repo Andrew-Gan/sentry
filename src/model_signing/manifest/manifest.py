@@ -315,10 +315,9 @@ class StateManifestItem(ManifestItem):
         """Builds a manifest item pairing a file with its digest.
 
         Args:
-            path: The path to the file, relative to the model root.
+            path: The name of the state
             digest: The digest of the file.
         """
-        # Note: we need to force a PosixPath to canonicalize the manifest.
         self.state = state
         self.digest = digest
 
@@ -332,7 +331,8 @@ class StateLevelManifest(ItemizedManifest):
         Rather than recording the items in a list, we use a dictionary, to allow
         efficient updates and retrieval of digests.
         """
-        self._item_to_digest = {item.path: item.digest for item in items}
+        i = items[0]
+        self._item_to_digest = {item.state: item.digest for item in items}
 
     def __eq__(self, other: Self):
         return self._item_to_digest == other._item_to_digest

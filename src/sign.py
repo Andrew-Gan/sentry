@@ -242,7 +242,7 @@ def sign_model():
         state_hasher_factory=hasher_factory
     )
 
-    states = [net.state_dict(),]
+    states = {'state_dict': net.state_dict(),}
 
     sig = model.sign_state(
         states=states,
