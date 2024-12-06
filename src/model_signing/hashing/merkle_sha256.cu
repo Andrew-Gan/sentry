@@ -166,7 +166,7 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
 void merkle_tree_pre(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  	int i = blockIdx.x * blockDim.x + threadIdx.x;
 
 	SHA256_CTX ctx;
 	if (i < n) {
@@ -183,8 +183,8 @@ void merkle_tree_pre(unsigned char *output, unsigned char *input, size_t blockSi
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_tree_hash(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-	__shared__ unsigned char shMem[1024 * DIGEST_SIZE];
+void merkle_tree_hash(unsigned char *output, unsigned char *input, size_t n) {
+	__shared__ unsigned char shMem[2048 * DIGEST_SIZE];
 	int i = blockIdx.x * blockDim.x + threadIdx.x;
 
 	SHA256_CTX ctx;
@@ -193,8 +193,8 @@ void merkle_tree_hash(unsigned char *output, unsigned char *input, size_t blockS
 
 	while (n >= 1) {
 		if (i < n) {
-			sha256_update(&ctx, &shMem[(2*i)*DIGEST_SIZE], blockSize);
-			sha256_update(&ctx, &shMem[(2*i+1)*DIGEST_SIZE], blockSize);
+			sha256_update(&ctx, &shMem[(2*i)*DIGEST_SIZE], DIGEST_SIZE);
+			sha256_update(&ctx, &shMem[(2*i+1)*DIGEST_SIZE], DIGEST_SIZE);
 		}
 
 		__syncthreads();
@@ -205,7 +205,7 @@ void merkle_tree_hash(unsigned char *output, unsigned char *input, size_t blockS
 	}
 
   if (i == 0)
-    memcpy(&output[blockIdx.x*1024*blockSize], &shMem[0], DIGEST_SIZE);
+    memcpy(&output[blockIdx.x*1024*DIGEST_SIZE], &shMem[0], DIGEST_SIZE);
 }
 
 #endif   // SHA256_H

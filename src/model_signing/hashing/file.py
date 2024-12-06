@@ -304,12 +304,14 @@ class ShardedFileHasher(SimpleFileHasher):
                 data = f.read(to_read)
                 self._content_hasher.update(data)
             else:
+                i = 0
                 while to_read >= 0:
                     data = f.read(min(self._chunk_size, to_read))
                     if not data:
                         break
                     to_read -= len(data)
                     self._content_hasher.update(data)
+                    i += 1
 
         digest = self._content_hasher.compute()
         return hashing.Digest(self.digest_name, digest.digest_value)

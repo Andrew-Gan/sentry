@@ -33,11 +33,33 @@ from model_signing.signing import in_toto_signature
 from model_signing.signing import signing
 from model_signing.signing import sigstore
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
+import time
+from cuda.bindings import driver, nvrtc, runtime
+import numpy as np
 
 log = logging.getLogger(__name__)
+SAMPLE_SIZE = 8
+
+
+def _cudaGetErrorEnum(error):
+    if isinstance(error, driver.CUresult):
+        err, name = driver.cuGetErrorName(error)
+        return name if err == driver.CUresult.CUDA_SUCCESS else "<unknown>"
+    elif isinstance(error, nvrtc.nvrtcResult):
+        return nvrtc.nvrtcGetErrorString(error)[1]
+    else:
+        raise RuntimeError('Unknown error type: {}'.format(error))
+
+
+def checkCudaErrors(result):
+    if result[0].value:
+        raise RuntimeError("CUDA error code={}({})".format(result[0].value, _cudaGetErrorEnum(result[0])))
+    if len(result) == 1:
+        return None
+    elif len(result) == 2:
+        return result[1]
+    else:
+        return result[1:]
 
 
 def _arguments() -> argparse.Namespace:
@@ -177,13 +199,12 @@ def _check_pki_options(args: argparse.Namespace):
         log.warning("No certificate chain provided")
 
 
-def sign_files():
+def sign_files(path):
+    path = pathlib.Path(path)
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
 
-    log.info(f"Creating signer for {args.method}")
     payload_signer = _get_payload_signer(args)
-    log.info(f"Signing model at {args.model_path}")
 
     def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
         return file.SimpleFileHasher(
@@ -194,48 +215,53 @@ def sign_files():
         file_hasher_factory=hasher_factory
     )
 
-    sig = model.sign_file(
-        model_path=args.model_path,
-        signer=payload_signer,
-        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-        serializer=serializer,
-        ignore_paths=[args.sig_out],
-    )
-
-    log.info(f'Storing signature at "{args.sig_out}"')
+    t0 = time.monotonic()
+    for _ in range(SAMPLE_SIZE):
+        sig = model.sign_file(
+            model_path=path,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+            ignore_paths=[args.sig_out],
+        )
+    t1 = time.monotonic()
+    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
 
 
-def sign_model():
+def sign_model(net : torch.nn.Module):
+    net = net.to('cuda')
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
 
-    log.info(f"Creating signer for {args.method}")
     payload_signer = _get_payload_signer(args)
-    
-    class Net(nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.conv1 = nn.Conv2d(3, 6, 5)
-            self.pool = nn.MaxPool2d(2, 2)
-            self.conv2 = nn.Conv2d(6, 16, 5)
-            self.fc1 = nn.Linear(16 * 5 * 5, 120)
-            self.fc2 = nn.Linear(120, 84)
-            self.fc3 = nn.Linear(84, 10)
 
-        def forward(self, x):
-            x = self.pool(F.relu(self.conv1(x)))
-            x = self.pool(F.relu(self.conv2(x)))
-            x = torch.flatten(x, 1) # flatten all dimensions except batch
-            x = F.relu(self.fc1(x))
-            x = F.relu(self.fc2(x))
-            x = self.fc3(x)
-            return x
-    net = Net().to('cuda')
+    with open('model_signing/hashing/merkle_sha256.cu', 'r') as f:
+        code = f.read()
+    driver.cuInit(0)
+    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
+    # get device arch
+    major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
+    minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
+    arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
+    # parse cuda code from file
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), b'merkle_sha256.cu', 0, [], []))
+    opts = [b'--fmad=false', arch_arg]
+    # compile code into program and extract ptx
+    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+    ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
+    ptx = b' ' * ptxSize
+    checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
+    ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
+    ptx = np.char.array(ptx)
+    # obtain global functions as entrypoints into gpu
+    module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
+    pre = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_tree_pre'))
+    hash = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_tree_hash'))
 
     def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
         return state.SimpleStateHasher(
-            state=state_dict, content_hasher=memory.SHA256()
+            state=state_dict, content_hasher=memory.MerkleGPU(pre, hash, ctx)
         )
 
     serializer = serialize_by_state.ManifestSerializer(
@@ -244,16 +270,25 @@ def sign_model():
 
     states = {'state_dict': net.state_dict(),}
 
-    sig = model.sign_state(
-        states=states,
-        signer=payload_signer,
-        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-        serializer=serializer,
-    )
-
-    log.info(f'Storing signature at "{args.sig_out}"')
+    t0 = time.monotonic()
+    for _ in range(SAMPLE_SIZE):
+        sig = model.sign_state(
+            states=states,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+        )
+    t1 = time.monotonic()
+    checkCudaErrors(driver.cuCtxDestroy(ctx))
+    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
 
-
 if __name__ == "__main__":
-    sign_model()
+    PATH = './model.pth'
+    vgg19 = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
+
+    for name, net in zip(['vgg19'], [vgg19]):
+        print(f'model: {name}, num param: {sum(p.numel() for p in net.parameters())}')
+        torch.save(net, PATH)
+        sign_files(PATH)
+        sign_model(net)

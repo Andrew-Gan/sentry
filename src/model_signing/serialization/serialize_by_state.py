@@ -19,7 +19,6 @@ import base64
 from collections.abc import Callable, Iterable
 import concurrent.futures
 import collections
-import pathlib
 from typing import cast
 
 from typing_extensions import override
@@ -83,7 +82,7 @@ class StateSerializer(serialization.Serializer):
     @override
     def serialize(
         self,
-        states: list[collections.OrderedDict],
+        states: dict[str, collections.OrderedDict],
     ) -> manifest.Manifest:
         """Serializes the model given by the `model_path` argument.
 
@@ -97,14 +96,13 @@ class StateSerializer(serialization.Serializer):
             ValueError: The model contains a symbolic link, but the serializer
               was not initialized with `allow_symlinks=True`.
         """
-
         manifest_items = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_workers
         ) as tpe:
             futures = [
                 tpe.submit(self._compute_hash, state)
-                for state in states
+                for state in states.items()
             ]
             for future in concurrent.futures.as_completed(futures):
                 manifest_items.append(future.result())
@@ -112,7 +110,7 @@ class StateSerializer(serialization.Serializer):
         return self._build_manifest(manifest_items)
 
     def _compute_hash(
-        self, state: collections.OrderedDict
+        self, state: tuple[str, collections.OrderedDict]
     ) -> manifest.StateManifestItem:
         """Produces the manifest item of the state given by `path`.
 
@@ -124,8 +122,8 @@ class StateSerializer(serialization.Serializer):
         Returns:
             The itemized manifest.
         """
-        digest = self._hasher_factory(state).compute()
-        return manifest.StateManifestItem(state=state, digest=digest)
+        digest = self._hasher_factory(state[1]).compute()
+        return manifest.StateManifestItem(state=state[0], digest=digest)
 
     @abc.abstractmethod
     def _build_manifest(

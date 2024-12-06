@@ -639,8 +639,8 @@ class DigestsIntotoPayload(IntotoPayload):
         Raises:
             TypeError: If the manifest is not `FileLevelManifest`.
         """
-        if not isinstance(manifest, manifest_module.FileLevelManifest):
-            raise TypeError("Only FileLevelManifest is supported")
+        if not isinstance(manifest, manifest_module.FileLevelManifest) and not isinstance(manifest, manifest_module.StateLevelManifest):
+            raise TypeError("Only FileLevelManifest and StateLevelManifest is supported")
 
         statement = _convert_descriptors_to_direct_statement(
             manifest, predicate_type=cls.predicate_type

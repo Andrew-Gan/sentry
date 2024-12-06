@@ -6,3 +6,5 @@
 __pycache__/
 dist/
 html/
+src/model.pth
+src/model.sig
