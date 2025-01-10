@@ -37,6 +37,8 @@ import time
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 
+import torchvision.transforms.v2
+
 log = logging.getLogger(__name__)
 SAMPLE_SIZE = 8
 
@@ -199,7 +201,7 @@ def _check_pki_options(args: argparse.Namespace):
         log.warning("No certificate chain provided")
 
 
-def sign_files(path):
+def sign_files(path, hasher, chunk=8192):
     path = pathlib.Path(path)
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
@@ -208,7 +210,7 @@ def sign_files(path):
 
     def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
         return file.SimpleFileHasher(
-            file=file_path, content_hasher=memory.SHA256()
+            file=file_path, content_hasher=hasher, chunk_size=chunk
         )
 
     serializer = serialize_by_file.ManifestSerializer(
@@ -229,39 +231,16 @@ def sign_files(path):
     sig.write(args.sig_out)
 
 
-def sign_model(net : torch.nn.Module):
+def sign_model(net, hasher):
     net = net.to('cuda')
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
 
     payload_signer = _get_payload_signer(args)
 
-    with open('model_signing/hashing/merkle_sha256.cu', 'r') as f:
-        code = f.read()
-    driver.cuInit(0)
-    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
-    # get device arch
-    major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
-    minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
-    arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-    # parse cuda code from file
-    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), b'merkle_sha256.cu', 0, [], []))
-    opts = [b'--fmad=false', arch_arg]
-    # compile code into program and extract ptx
-    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
-    ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
-    ptx = b' ' * ptxSize
-    checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
-    ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
-    ptx = np.char.array(ptx)
-    # obtain global functions as entrypoints into gpu
-    module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
-    pre = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_tree_pre'))
-    hash = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_tree_hash'))
-
     def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
         return state.SimpleStateHasher(
-            state=state_dict, content_hasher=memory.MerkleGPU(pre, hash, ctx)
+            state=state_dict, content_hasher=hasher
         )
 
     serializer = serialize_by_state.ManifestSerializer(
@@ -279,16 +258,91 @@ def sign_model(net : torch.nn.Module):
             serializer=serializer,
         )
     t1 = time.monotonic()
-    checkCudaErrors(driver.cuCtxDestroy(ctx))
     print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
 
+def compile_sha256(arch_arg, cuDevice):
+    with open('model_signing/cuda/sha256.cu', 'r') as f:
+        code = f.read()
+    # parse cuda code from file
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), b'sha256.cu', 0, [], []))
+    opts = [b'--fmad=false', arch_arg]
+    # compile code into program and extract ptx
+    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+    ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
+    ptx = b' ' * ptxSize
+    checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
+    ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
+    ptx = np.char.array(ptx)
+    # obtain global functions as entrypoints into gpu
+    module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
+    streamHash = checkCudaErrors(driver.cuModuleGetFunction(module, b'hash_sha256'))
+    pre = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_sha256_pre'))
+    treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_sha256_hash'))
+    return ctx, streamHash, pre, treeHash
+
+def compile_blake2(arch_arg, cuDevice):
+    with open('model_signing/cuda/blake2.cu', 'r') as f:
+        code = f.read()
+    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
+    # get device arch
+    major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
+    minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
+    arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
+    # parse cuda code from file
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), b'blake2.cu', 0, [], []))
+    opts = [b'--fmad=false', arch_arg]
+    # compile code into program and extract ptx
+    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+    ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
+    ptx = b' ' * ptxSize
+    checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
+    ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
+    ptx = np.char.array(ptx)
+    # obtain global functions as entrypoints into gpu
+    module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
+    streamHash = checkCudaErrors(driver.cuModuleGetFunction(module, b'hash_blake2'))
+    treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, b'merkle_blake2_hash'))
+    return ctx, streamHash, treeHash
+
 if __name__ == "__main__":
     PATH = './model.pth'
-    vgg19 = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
+    models = []
+    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'resnet152', pretrained=True))
+    models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
+    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
 
-    for name, net in zip(['vgg19'], [vgg19]):
-        print(f'model: {name}, num param: {sum(p.numel() for p in net.parameters())}')
+    driver.cuInit(0)
+    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
+    # get device arch
+    major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
+    minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
+    arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
+    ctx, streamHash, pre, treeHash = compile_sha256(arch_arg, cuDevice)
+    ctx, streamHash, treeHash = compile_blake2(arch_arg, cuDevice)
+
+    for net in models:
+        print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
+        t0 = time.monotonic()
         torch.save(net, PATH)
-        sign_files(PATH)
-        sign_model(net)
+        t1 = time.monotonic()
+        print(f'Save to file: {1000*(t1-t0):.2f} ms')
+
+        print('Hashing from file using SHA256')
+        sign_files(PATH, memory.SHA256())
+        print('Hashing from file using BLAKE2')
+        sign_files(PATH, memory.BLAKE2())
+
+        # print('Hashing from device using StreamGPU-SHA256')
+        # sign_files(PATH, memory.StreamGPU(basicHash, ctx), 0)
+
+        print('Hashing from device using MerkleGPU-SHA256')
+        sign_model(net, memory.MerkleGPU(pre, treeHash, ctx))
+    
+    checkCudaErrors(driver.cuModuleUnload(streamHash))
+    checkCudaErrors(driver.cuModuleUnload(pre))
+    checkCudaErrors(driver.cuModuleUnload(treeHash))
+    checkCudaErrors(driver.cuCtxDestroy(ctx))

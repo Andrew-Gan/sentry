@@ -130,6 +130,57 @@ class BLAKE2(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self._hasher.digest_size
 
+class StreamGPU(hashing.StreamingHashEngine):
+    def __init__(self, hash, ctx):
+        self.ctx = ctx
+        self.hash = hash
+    
+    @override
+    def update(self, data: bytes, blockSize = 8192) -> None:
+        self.digest = bytes(32)
+        checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
+        stream = checkCudaErrors(runtime.cudaStreamCreate())
+        iData = checkCudaErrors(runtime.cudaMalloc(len(data)))
+        checkCudaErrors(runtime.cudaMemcpy(iData, data, len(data),
+            runtime.cudaMemcpyKind.cudaMemcpyHostToDevice))
+
+        iDataA = np.array([iData], dtype=np.uint64)
+        oData = checkCudaErrors(runtime.cudaMalloc(32))
+        oDataA = np.array([oData], dtype=np.uint64)
+        nA = np.array([len(data) // blockSize], dtype=np.uint64)
+        blockSizeA = np.array([blockSize], dtype=np.uint64)
+
+        args = [oDataA, iDataA, blockSizeA, nA]
+        args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+
+        checkCudaErrors(driver.cuLaunchKernel(
+            self.hash, 1, 1, 1, 1, 1, 1, 0, stream, args.ctypes.data, 0,
+        ))
+
+        checkCudaErrors(runtime.cudaMemcpy(self.digest, oData, 32,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+        checkCudaErrors(runtime.cudaFree(iData))
+        checkCudaErrors(runtime.cudaFree(oData))
+    
+    @override
+    def reset(self, data: bytes = b"") -> None:
+        pass
+
+    @override
+    def compute(self):
+        return hashing.Digest(self.digest_name, self.digest)
+
+    @property
+    @override
+    def digest_name(self) -> str:
+        return "StreamGPU"
+
+    @property
+    @override
+    def digest_size(self) -> int:
+        return 32
+
+
 class MerkleGPU(hashing.StreamingHashEngine):
     def __init__(self, pre, hash, ctx):
         self.ctx = ctx
@@ -195,12 +246,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     @override
     def compute(self) -> hashing.Digest:
-        return hashing.Digest('Merkle-SHA256', self.digest)
+        return hashing.Digest(self.digest_name, self.digest)
 
     @property
     @override
     def digest_name(self) -> str:
-        return "Merkle-SHA256"
+        return "MerkleGPU"
 
     @property
     @override

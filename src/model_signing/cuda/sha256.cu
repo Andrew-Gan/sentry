@@ -163,9 +163,19 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 	}
 }
 
+extern "C" __global__
+void hash(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+	SHA256_CTX ctx;
+	sha256_init(&ctx);
+	for (size_t i = 0; i < n; i++) {
+		sha256_update(&ctx, input + i * blockSize, blockSize);
+	}
+	sha256_final(&ctx, output);
+}
+
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_tree_pre(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void merkle_sha256_pre(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
   	int i = blockIdx.x * blockDim.x + threadIdx.x;
 
 	SHA256_CTX ctx;
@@ -183,29 +193,33 @@ void merkle_tree_pre(unsigned char *output, unsigned char *input, size_t blockSi
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_tree_hash(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[2048 * DIGEST_SIZE];
-	int i = blockIdx.x * blockDim.x + threadIdx.x;
+void merkle_sha256_hash(unsigned char *output, unsigned char *input, size_t n) {
+	__shared__ unsigned char shMem[1024 * DIGEST_SIZE];
+	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
+	int locIdx = threadIdx.x;
 
 	SHA256_CTX ctx;
-	if (i < n)
+	if (glbIdx < n) {
 		sha256_init(&ctx);
-
-	while (n >= 1) {
-		if (i < n) {
-			sha256_update(&ctx, &shMem[(2*i)*DIGEST_SIZE], DIGEST_SIZE);
-			sha256_update(&ctx, &shMem[(2*i+1)*DIGEST_SIZE], DIGEST_SIZE);
+		sha256_update(&ctx, &input[(2*glbIdx)*DIGEST_SIZE], DIGEST_SIZE);
+		sha256_update(&ctx, &input[(2*glbIdx+1)*DIGEST_SIZE], DIGEST_SIZE);
+		sha256_final(&ctx, &shMem[locIdx*DIGEST_SIZE]);
+	}
+	
+	for (int block = 512; block >= 1; block /= 2) {
+		if (glbIdx < n && locIdx < block) {
+			sha256_update(&ctx, &shMem[(2*locIdx)*DIGEST_SIZE], DIGEST_SIZE);
+			sha256_update(&ctx, &shMem[(2*locIdx+1)*DIGEST_SIZE], DIGEST_SIZE);
 		}
 
 		__syncthreads();
 
-		if (i < n)
-			sha256_final(&ctx, &shMem[i*DIGEST_SIZE]);
-		n /= 2;
+		if (glbIdx < n && locIdx < block)
+			sha256_final(&ctx, &shMem[locIdx*DIGEST_SIZE]);
 	}
 
-  if (i == 0)
-    memcpy(&output[blockIdx.x*1024*DIGEST_SIZE], &shMem[0], DIGEST_SIZE);
+  if (locIdx == 0)
+    memcpy(&output[blockIdx.x*2048*DIGEST_SIZE], shMem, DIGEST_SIZE);
 }
 
 #endif   // SHA256_H
