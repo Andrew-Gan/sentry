@@ -154,42 +154,45 @@ void blake2b_update(Blake2bState *state, unsigned int idx) {
 }
 
 extern "C" __global__
-void hash_blake2(unsigned char *output, unsigned char *input, size_t n) {
-	const size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(unsigned int);
+void stream_hash_blake2(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
 	Blake2bState ctx;
-  ctx.buflen = BLAKE2B_BLOCKBYTES;
+  size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(unsigned int);
 	for (size_t i = 0; i < n; i++) {
+    ctx.buflen = blkSize;
 		memcpy(ctx.buf, input + i * blkSize, blkSize);
 		blake2b_update(&ctx, i);
-		ctx.counter += BLAKE2B_BLOCKBYTES;
 	}
   memcpy(output, ctx.h, BLAKE2B_OUTBYTES);
 }
 
 extern "C" __global__
-void merkle_blake2_pre(unsigned char *output, unsigned char *input, size_t n) {
-  int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
+void merkle_pre_blake2(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
   Blake2bState ctx;
-  ctx.buflen = BLAKE2B_BLOCKBYTES;
+  size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(unsigned int);
+  ctx.buflen = blkSize;
 
-	if (glbIdx < n)
-		blake2b_update(&ctx, glbIdx);
+	if (i < n) {
+    memcpy(ctx.buf, input + i * blkSize, blkSize);
+		blake2b_update(&ctx, i);
+  }
 
 	__syncthreads();
 
-	if (glbIdx < n)
-    memcpy(&output[glbIdx * BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
+	if (i < n)
+    memcpy(&output[i * BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
 }
 
 // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_blake2_hash(unsigned char *output, unsigned char *input, size_t n) {
+void merkle_hash_blake2(unsigned char *output, unsigned char *input, size_t n) {
 	__shared__ unsigned char shMem[512 * BLAKE2B_OUTBYTES];
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
 	int locIdx = threadIdx.x;
 
 	Blake2bState ctx;
   ctx.buflen = BLAKE2B_OUTBYTES;
+
 	if (glbIdx < n) {
 		memcpy(ctx.buf, &input[(2*glbIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
 		blake2b_update(&ctx, glbIdx);
@@ -197,7 +200,7 @@ void merkle_blake2_hash(unsigned char *output, unsigned char *input, size_t n) {
 		blake2b_update(&ctx, glbIdx);
 		memcpy(&shMem[locIdx*BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
 	}
-	
+
 	for (int block = blockDim.x / 2; block >= 1; block /= 2) {
 		if (glbIdx < n && locIdx < block) {
 			memcpy(ctx.buf, &shMem[(2*locIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);

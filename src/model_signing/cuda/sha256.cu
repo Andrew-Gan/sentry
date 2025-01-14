@@ -164,7 +164,7 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 }
 
 extern "C" __global__
-void hash_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void stream_hash_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
 	SHA256_CTX ctx;
 	sha256_init(&ctx);
 	for (size_t i = 0; i < n; i++) {
@@ -175,8 +175,8 @@ void hash_sha256(unsigned char *output, unsigned char *input, size_t blockSize, 
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_sha256_pre(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-  	int i = blockIdx.x * blockDim.x + threadIdx.x;
+void merkle_pre_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+  int i = blockIdx.x * blockDim.x + threadIdx.x;
 
 	SHA256_CTX ctx;
 	if (i < n) {
@@ -192,7 +192,7 @@ void merkle_sha256_pre(unsigned char *output, unsigned char *input, size_t block
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_sha256_hash(unsigned char *output, unsigned char *input, size_t n) {
+void merkle_hash_sha256(unsigned char *output, unsigned char *input, size_t n) {
 	__shared__ unsigned char shMem[1024 * DIGEST_SIZE];
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
 	int locIdx = threadIdx.x;

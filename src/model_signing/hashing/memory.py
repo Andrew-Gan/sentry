@@ -137,19 +137,23 @@ class StreamGPU(hashing.StreamingHashEngine):
         self.digestSize = digest_size
     
     @override
-    def update(self, data: bytes, blockSize = 8192) -> None:
+    def update(self, data: collections.OrderedDict, blockSize: int) -> None:
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
+        total_size = sum(d.nbytes for d in data.values())
         stream = checkCudaErrors(runtime.cudaStreamCreate())
-        iData = checkCudaErrors(runtime.cudaMalloc(len(data)))
-        checkCudaErrors(runtime.cudaMemcpy(iData, data, len(data),
-            runtime.cudaMemcpyKind.cudaMemcpyHostToDevice))
+        iData = checkCudaErrors(runtime.cudaMalloc(total_size))
+        i = 0
+        for v in data.values():
+            checkCudaErrors(runtime.cudaMemcpy(iData+i, v.data_ptr(),
+                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            i += v.nbytes
 
         iDataA = np.array([iData], dtype=np.uint64)
         oData = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         oDataA = np.array([oData], dtype=np.uint64)
-        nA = np.array([len(data) // blockSize], dtype=np.uint64)
         blockSizeA = np.array([blockSize], dtype=np.uint64)
+        nA = np.array([total_size // blockSize], dtype=np.uint64)
 
         args = [oDataA, iDataA, blockSizeA, nA]
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
