@@ -40,10 +40,7 @@ __device__ __inline__ uint2 ROR16(const uint2 a) {
   return result;
 }
 
-
-typedef uint64_t u64;
-
-static __constant__ const int8_t blake2b_sigma[12][16] = {
+static __constant__ const char blake2b_sigma[12][16] = {
   { 0,  1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15 } ,
   { 14, 10, 4,  8,  9,  15, 13, 6,  1,  12, 0,  2,  11, 7,  5,  3  } ,
   { 11, 8,  12, 0,  5,  2,  15, 13, 10, 14, 3,  6,  7,  1,  9,  4  } ,
@@ -59,7 +56,7 @@ static __constant__ const int8_t blake2b_sigma[12][16] = {
 };
 
 __device__ __forceinline__
-static void G(const int r, const int i, u64 &a, u64 &b, u64 &c, u64 &d, u64 const m[16]) {
+static void G(const int r, const int i, unsigned long &a, unsigned long &b, unsigned long &c, unsigned long &d, unsigned long const m[16]) {
   a = a + b + m[ blake2b_sigma[r][2*i] ];
   ((uint2*)&d)[0] = SWAPUINT2( ((uint2*)&d)[0] ^ ((uint2*)&a)[0] );
   c = c + d;
@@ -81,21 +78,21 @@ static void G(const int r, const int i, u64 &a, u64 &b, u64 &c, u64 &d, u64 cons
   G(r, 7, v[3], v[4], v[ 9], v[14], m);
 
 struct Blake2bState {
-	uint64_t h[8];
-	uint8_t  buf[BLAKE2B_BLOCKBYTES];
-	uint16_t counter;
-	uint8_t  buflen;
+	unsigned long  h[8];
+	unsigned char  buf[BLAKE2B_BLOCKBYTES];
+	unsigned short counter;
+	unsigned char  buflen;
 };
 
 __device__
-void blake2b_update(Blake2bState *state, u32 idx) {
-  memcpy(state->buf + state->buflen, &idx, sizeof(u32));
-  state->buflen += sizeof(u32);
+void blake2b_update(Blake2bState *state, unsigned int idx) {
+  memcpy(state->buf + state->buflen, &idx, sizeof(unsigned int));
+  state->buflen += sizeof(unsigned int);
   state->counter += state->buflen;
   memset(state->buf + state->buflen, 0, BLAKE2B_BLOCKBYTES - state->buflen);
 
-  u64 *d_data = (u64 *)state->buf;
-  u64 m[16];
+  unsigned long *d_data = (unsigned long *)state->buf;
+  unsigned long m[16];
 
   m[0] = d_data[0];
   m[1] = d_data[1];
@@ -114,7 +111,7 @@ void blake2b_update(Blake2bState *state, u32 idx) {
   m[14] = d_data[14];
   m[15] = d_data[15];
 
-  u64 v[16];
+  unsigned long v[16];
 
   v[0] = state->h[0];
   v[1] = state->h[1];
@@ -158,47 +155,63 @@ void blake2b_update(Blake2bState *state, u32 idx) {
 
 extern "C" __global__
 void hash_blake2(unsigned char *output, unsigned char *input, size_t n) {
-	const size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(u32);
-	Blake2bState ctx = {.buflen = BLAKE2B_BLOCKBYTES};
+	const size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(unsigned int);
+	Blake2bState ctx;
+  ctx.buflen = BLAKE2B_BLOCKBYTES;
 	for (size_t i = 0; i < n; i++) {
 		memcpy(ctx.buf, input + i * blkSize, blkSize);
 		blake2b_update(&ctx, i);
 		ctx.counter += BLAKE2B_BLOCKBYTES;
 	}
-  	memcpy(output, ctx->h, BLAKE2B_OUTBYTES);
+  memcpy(output, ctx.h, BLAKE2B_OUTBYTES);
 }
 
-// // subsequent halving of merkle tree until one digest remains per threadblock
+extern "C" __global__
+void merkle_blake2_pre(unsigned char *output, unsigned char *input, size_t n) {
+  int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
+  Blake2bState ctx;
+  ctx.buflen = BLAKE2B_BLOCKBYTES;
+
+	if (glbIdx < n)
+		blake2b_update(&ctx, glbIdx);
+
+	__syncthreads();
+
+	if (glbIdx < n)
+    memcpy(&output[glbIdx * BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
+}
+
+// subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_blake2_hash(unsigned char *output, unsigned char *input, size_t n) {
-	const size_t blkSize = BLAKE2B_BLOCKBYTES-sizeof(u32);
-	__shared__ unsigned char shMem[1024 * BLAKE2B_OUTBYTES];
+	__shared__ unsigned char shMem[512 * BLAKE2B_OUTBYTES];
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
 	int locIdx = threadIdx.x;
 
-	Blake2bState ctx = {.buflen = BLAKE2B_BLOCKBYTES};
+	Blake2bState ctx;
+  ctx.buflen = BLAKE2B_OUTBYTES;
 	if (glbIdx < n) {
-		memcpy(ctx.buf, &input[(2*glbIdx)*blkSize], blkSize);
+		memcpy(ctx.buf, &input[(2*glbIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
 		blake2b_update(&ctx, glbIdx);
-		memcpy(ctx.buf, &input[(2*glbIdx+1)*blkSize], blkSize);
+		memcpy(ctx.buf, &input[(2*glbIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
 		blake2b_update(&ctx, glbIdx);
-		memcpy(&shMem[locIdx*BLAKE2B_OUTBYTES], ctx->h, BLAKE2B_OUTBYTES);
+		memcpy(&shMem[locIdx*BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
 	}
 	
-	for (int block = 512; block >= 1; block /= 2) {
+	for (int block = blockDim.x / 2; block >= 1; block /= 2) {
 		if (glbIdx < n && locIdx < block) {
-			memcpy(ctx.buf, &shMem[(2*locIdx)*BLAKE2B_OUTBYTES], blkSize);
+			memcpy(ctx.buf, &shMem[(2*locIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
 			blake2b_update(&ctx, glbIdx);
-			memcpy(ctx.buf, &shMem[(2*locIdx+1)*BLAKE2B_OUTBYTES], blkSize);
+			memcpy(ctx.buf, &shMem[(2*locIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
 			blake2b_update(&ctx, glbIdx);
 		}
 
 		__syncthreads();
 
 		if (glbIdx < n && locIdx < block)
-			memcpy(&shMem[locIdx*BLAKE2B_OUTBYTES], ctx->h, BLAKE2B_OUTBYTES);
+			memcpy(&shMem[locIdx*BLAKE2B_OUTBYTES], ctx.h, BLAKE2B_OUTBYTES);
 	}
 
   if (locIdx == 0)
-	memcpy(shMem, ctx->h, BLAKE2B_OUTBYTES);
+    memcpy(&output[blockIdx.x*(blockDim.x*2)*BLAKE2B_OUTBYTES], shMem, BLAKE2B_OUTBYTES);
 }
