@@ -1,0 +1,17 @@
+services:
+  cusign:
+    build:
+      dockerfile: dockerfile
+    image: cusign:latest
+    container_name: cusign
+    volumes:
+      - /share/sign-ml/torch:/home/torch
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0', '1']
+              capabilities: [gpu]

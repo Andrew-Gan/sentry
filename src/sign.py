@@ -14,6 +14,7 @@
 
 """Script to sign models."""
 
+import sys
 import argparse
 import logging
 import pathlib
@@ -301,11 +302,11 @@ if __name__ == "__main__":
     PATH = './model.pth'
     models = []
     models.append(torch.hub.load('pytorch/vision:v0.10.0', 'resnet152', pretrained=True))
-    models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
-    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
+    # models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
+    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
+    # models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
+    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
+    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
 
     driver.cuInit(0)
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
@@ -315,7 +316,7 @@ if __name__ == "__main__":
     minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
     opts = [b'--fmad=false', arch_arg]
-    
+
     streamHashSha256, preHashSha256, treeHashSha256 = compile_sha256(arch_arg, ctx, opts)
     streamHashBlake2, preHashBlake2, treeHashBlake2 = compile_blake2(arch_arg, ctx, opts)
 
@@ -327,24 +328,24 @@ if __name__ == "__main__":
         print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
         t0 = time.monotonic()
-        torch.load(PATH)
+        torch.load(PATH, weights_only=False)
         t1 = time.monotonic()
         print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        print('Hashing from file using SHA256')
-        sign_files(PATH, memory.SHA256())
+        # print('Hashing from file using SHA256')
+        # sign_files(PATH, memory.SHA256())
 
-        print('Hashing from device using StreamGPU-SHA256')
-        sign_model(net, memory.StreamGPU(streamHashSha256, ctx, 32))
+        # print('Hashing from device using StreamGPU-SHA256')
+        # sign_model(net, memory.StreamGPU(streamHashSha256, ctx, 32))
 
         print('Hashing from device using MerkleGPU-SHA256')
         sign_model(net, memory.MerkleGPU(preHashSha256, treeHashSha256, ctx, 32))
 
-        print('Hashing from file using BLAKE2')
-        sign_files(PATH, memory.BLAKE2())
+        # print('Hashing from file using BLAKE2')
+        # sign_files(PATH, memory.BLAKE2())
 
-        print('Hashing from device using StreamGPU-Blake2')
-        sign_model(net, memory.StreamGPU(streamHashBlake2, ctx, 64))
+        # print('Hashing from device using StreamGPU-Blake2')
+        # sign_model(net, memory.StreamGPU(streamHashBlake2, ctx, 64))
 
         print('Hashing from device using MerkleGPU-Blake2')
         sign_model(net, memory.MerkleGPU(preHashBlake2, treeHashBlake2, ctx, 64))
