@@ -1,10 +1,34 @@
-#ifndef SHA256_H
-#define SHA256_H
+/*
+ * sha256.cu Implementation of SHA256 Hashing    
+ *
+ * Date: 12 June 2019
+ * Revision: 1
+ * *
+ * Based on the public domain Reference Implementation in C, by
+ * Brad Conte, original code here:
+ *
+ * https://github.com/B-Con/crypto-algorithms
+ *
+ * This file is released into the Public Domain.
+ */
 
-// /****************************** MACROS ******************************/
-#define DIGEST_SIZE 32            // SHA256 outputs a 32 byte digest
+/****************************** MACROS ******************************/
+#define SHA256_BLOCK_SIZE 32            // SHA256 outputs a 32 byte digest
 
+/**************************** DATA TYPES ****************************/
+
+typedef struct {
+	unsigned char data[64];
+	unsigned int datalen;
+	unsigned long long bitlen;
+	unsigned int state[8];
+} CUDA_SHA256_CTX;
+
+/****************************** MACROS ******************************/
+#ifndef ROTLEFT
 #define ROTLEFT(a,b) (((a) << (b)) | ((a) >> (32-(b))))
+#endif
+
 #define ROTRIGHT(a,b) (((a) >> (b)) | ((a) << (32-(b))))
 
 #define CH(x,y,z) (((x) & (y)) ^ (~(x) & (z)))
@@ -14,14 +38,7 @@
 #define SIG0(x) (ROTRIGHT(x,7) ^ ROTRIGHT(x,18) ^ ((x) >> 3))
 #define SIG1(x) (ROTRIGHT(x,17) ^ ROTRIGHT(x,19) ^ ((x) >> 10))
 
-
-typedef struct {
-	unsigned char data[64];
-	unsigned int datalen;
-	unsigned long long bitlen;
-	unsigned int state[8];
-} SHA256_CTX;
-
+/**************************** VARIABLES *****************************/
 __constant__ unsigned int k[64] = {
 	0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
 	0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
@@ -33,24 +50,14 @@ __constant__ unsigned int k[64] = {
 	0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
 };
 
-// /*********************** FUNCTION DECLARATIONS **********************/
-__device__
-void sha256_init(SHA256_CTX *ctx);
-__device__
-void sha256_update(SHA256_CTX *ctx, const unsigned char data[], size_t len);
-__device__
-void sha256_final(SHA256_CTX *ctx, unsigned char hash[]);
-
-__device__
-void sha256_transform(SHA256_CTX *ctx, const unsigned char data[]) {
+/*********************** FUNCTION DEFINITIONS ***********************/
+__device__  __forceinline__ void cuda_sha256_transform(CUDA_SHA256_CTX *ctx, const unsigned char data[])
+{
 	unsigned int a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
 
-    #pragma unroll 16
 	for (i = 0, j = 0; i < 16; ++i, j += 4)
 		m[i] = (data[j] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3]);
-
-    #pragma unroll 64
-	for (; i < 64; ++i)
+	for ( ; i < 64; ++i)
 		m[i] = SIG1(m[i - 2]) + m[i - 7] + SIG0(m[i - 15]) + m[i - 16];
 
 	a = ctx->state[0];
@@ -62,10 +69,9 @@ void sha256_transform(SHA256_CTX *ctx, const unsigned char data[]) {
 	g = ctx->state[6];
 	h = ctx->state[7];
 
-    #pragma unroll 64
 	for (i = 0; i < 64; ++i) {
-		t1 = h + EP1(e) + CH(e, f, g) + k[i] + m[i];
-		t2 = EP0(a) + MAJ(a, b, c);
+		t1 = h + EP1(e) + CH(e,f,g) + k[i] + m[i];
+		t2 = EP0(a) + MAJ(a,b,c);
 		h = g;
 		g = f;
 		f = e;
@@ -86,8 +92,8 @@ void sha256_transform(SHA256_CTX *ctx, const unsigned char data[]) {
 	ctx->state[7] += h;
 }
 
-__device__
-void sha256_init(SHA256_CTX *ctx) {
+__device__ void cuda_sha256_init(CUDA_SHA256_CTX *ctx)
+{
 	ctx->datalen = 0;
 	ctx->bitlen = 0;
 	ctx->state[0] = 0x6a09e667;
@@ -100,25 +106,23 @@ void sha256_init(SHA256_CTX *ctx) {
 	ctx->state[7] = 0x5be0cd19;
 }
 
-__device__
-void sha256_update(SHA256_CTX *ctx, const unsigned char data[], size_t len) {
+__device__ void cuda_sha256_update(CUDA_SHA256_CTX *ctx, const unsigned char data[], size_t len)
+{
 	unsigned int i;
 
-	// for each byte in message
 	for (i = 0; i < len; ++i) {
-		// ctx->data == message 512 bit chunk
 		ctx->data[ctx->datalen] = data[i];
 		ctx->datalen++;
 		if (ctx->datalen == 64) {
-			sha256_transform(ctx, ctx->data);
+			cuda_sha256_transform(ctx, ctx->data);
 			ctx->bitlen += 512;
 			ctx->datalen = 0;
 		}
 	}
 }
 
-__device__
-void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
+__device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, unsigned char hash[])
+{
 	unsigned int i;
 
 	i = ctx->datalen;
@@ -133,7 +137,7 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 		ctx->data[i++] = 0x80;
 		while (i < 64)
 			ctx->data[i++] = 0x00;
-		sha256_transform(ctx, ctx->data);
+		cuda_sha256_transform(ctx, ctx->data);
 		memset(ctx->data, 0, 56);
 	}
 
@@ -147,14 +151,14 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 	ctx->data[58] = ctx->bitlen >> 40;
 	ctx->data[57] = ctx->bitlen >> 48;
 	ctx->data[56] = ctx->bitlen >> 56;
-	sha256_transform(ctx, ctx->data);
+	cuda_sha256_transform(ctx, ctx->data);
 
 	// Since this implementation uses little endian byte ordering and SHA uses big endian,
 	// reverse all the bytes when copying the final state to the output hash.
 	for (i = 0; i < 4; ++i) {
-		hash[i] = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 4] = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 8] = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
+		hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
+		hash[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
@@ -164,61 +168,59 @@ void sha256_final(SHA256_CTX *ctx, unsigned char hash[]) {
 }
 
 extern "C" __global__
-void stream_hash_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-	SHA256_CTX ctx;
-	sha256_init(&ctx);
+void seq_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+	CUDA_SHA256_CTX ctx;
+	cuda_sha256_init(&ctx);
 	for (size_t i = 0; i < n; i++) {
-		sha256_update(&ctx, input + i * blockSize, blockSize);
+		cuda_sha256_update(&ctx, input + i * blockSize, blockSize);
 	}
-	sha256_final(&ctx, output);
+	cuda_sha256_final(&ctx, output);
 }
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
 void merkle_pre_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-  int i = blockIdx.x * blockDim.x + threadIdx.x;
+  	int i = blockIdx.x * blockDim.x + threadIdx.x;
 
-	SHA256_CTX ctx;
+	CUDA_SHA256_CTX ctx;
 	if (i < n) {
-		sha256_init(&ctx);
-		sha256_update(&ctx, input + i * blockSize, blockSize);
+		cuda_sha256_init(&ctx);
+		cuda_sha256_update(&ctx, input + i * blockSize, blockSize);
 	}
 
 	__syncthreads();
 
 	if (i < n)
-		sha256_final(&ctx, &output[i * DIGEST_SIZE]);
+		cuda_sha256_final(&ctx, &output[i * SHA256_BLOCK_SIZE]);
 }
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_hash_sha256(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[1024 * DIGEST_SIZE];
+void merkle_tree_sha256(unsigned char *output, unsigned char *input, size_t n) {
+	__shared__ unsigned char shMem[1024 * SHA256_BLOCK_SIZE];
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
 	int locIdx = threadIdx.x;
 
-	SHA256_CTX ctx;
+	CUDA_SHA256_CTX ctx;
 	if (glbIdx < n) {
-		sha256_init(&ctx);
-		sha256_update(&ctx, &input[(2*glbIdx)*DIGEST_SIZE], DIGEST_SIZE);
-		sha256_update(&ctx, &input[(2*glbIdx+1)*DIGEST_SIZE], DIGEST_SIZE);
-		sha256_final(&ctx, &shMem[locIdx*DIGEST_SIZE]);
+		cuda_sha256_init(&ctx);
+		cuda_sha256_update(&ctx, &input[(2*glbIdx)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
+		cuda_sha256_update(&ctx, &input[(2*glbIdx+1)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
+		cuda_sha256_final(&ctx, &shMem[locIdx*SHA256_BLOCK_SIZE]);
 	}
 	
 	for (int block = 512; block >= 1; block /= 2) {
 		if (glbIdx < n && locIdx < block) {
-			sha256_update(&ctx, &shMem[(2*locIdx)*DIGEST_SIZE], DIGEST_SIZE);
-			sha256_update(&ctx, &shMem[(2*locIdx+1)*DIGEST_SIZE], DIGEST_SIZE);
+			cuda_sha256_update(&ctx, &shMem[(2*locIdx)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
+			cuda_sha256_update(&ctx, &shMem[(2*locIdx+1)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
 		}
 
 		__syncthreads();
 
 		if (glbIdx < n && locIdx < block)
-			sha256_final(&ctx, &shMem[locIdx*DIGEST_SIZE]);
+			cuda_sha256_final(&ctx, &shMem[locIdx*SHA256_BLOCK_SIZE]);
 	}
 
   if (locIdx == 0)
-    memcpy(&output[blockIdx.x*2048*DIGEST_SIZE], shMem, DIGEST_SIZE);
+    memcpy(&output[blockIdx.x*2048*SHA256_BLOCK_SIZE], shMem, SHA256_BLOCK_SIZE);
 }
-
-#endif   // SHA256_H

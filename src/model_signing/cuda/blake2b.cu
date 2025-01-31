@@ -7,80 +7,38 @@
  * This file is released into the Public Domain.
  */
 
-
-#include <assert.h>
-extern "C"
-{
-#include "blake2b.cuh"
-}
 #define BLAKE2B_ROUNDS 12
 #define BLAKE2B_BLOCK_LENGTH 128
 #define BLAKE2B_CHAIN_SIZE 8
-#define BLAKE2B_CHAIN_LENGTH (BLAKE2B_CHAIN_SIZE * sizeof(int64_t))
+#define BLAKE2B_CHAIN_LENGTH (BLAKE2B_CHAIN_SIZE * sizeof(long))
 #define BLAKE2B_STATE_SIZE 16
-#define BLAKE2B_STATE_LENGTH (BLAKE2B_STATE_SIZE * sizeof(int64_t))
+#define BLAKE2B_STATE_LENGTH (BLAKE2B_STATE_SIZE * sizeof(long))
+#define BLAKE2B_OUTBYTES 32
+
 extern "C"
 {
 typedef struct {
+    unsigned int digestlen;
+    unsigned char key[64];
+    unsigned int keylen;
 
-    WORD digestlen;
-    BYTE key[64];
-    WORD keylen;
+    unsigned char buff[BLAKE2B_BLOCK_LENGTH];
+    long chain[BLAKE2B_CHAIN_SIZE];
+    long state[BLAKE2B_STATE_SIZE];
 
-    BYTE buff[BLAKE2B_BLOCK_LENGTH];
-    int64_t chain[BLAKE2B_CHAIN_SIZE];
-    int64_t state[BLAKE2B_STATE_SIZE];
-
-    WORD pos;
-    LONG t0;
-    LONG t1;
-    LONG f0;
-
-} cuda_blake2b_ctx_t;
+    unsigned int pos;
+    long t0;
+    long t1;
+    long f0;
+} CUDA_BLAKE2B_CTX;
 }
-typedef cuda_blake2b_ctx_t CUDA_BLAKE2B_CTX;
 
-__constant__ CUDA_BLAKE2B_CTX c_CTX;
-
-__constant__ LONG BLAKE2B_IVS[8] =
+__constant__ long BLAKE2B_IVS[8] =
 {
         0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b,
         0xa54ff53a5f1d36f1, 0x510e527fade682d1, 0x9b05688c2b3e6c1f,
         0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
 };
-
-const LONG CPU_BLAKE2B_IVS[8] =
-{
-        0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b,
-        0xa54ff53a5f1d36f1, 0x510e527fade682d1, 0x9b05688c2b3e6c1f,
-        0x1f83d9abfb41bd6b, 0x5be0cd19137e2179
-};
-
-void cpu_blake2b_init(cuda_blake2b_ctx_t *ctx, BYTE* key, WORD keylen, WORD digestbitlen)
-{
-    memset(ctx, 0, sizeof(cuda_blake2b_ctx_t));
-    memcpy(ctx->buff, key, keylen);
-    memcpy(ctx->key, key, keylen);
-    ctx->keylen = keylen;
-
-    ctx->digestlen = digestbitlen >> 3;
-    ctx->pos = 0;
-    ctx->t0 = 0;
-    ctx->t1 = 0;
-    ctx->f0 = 0;
-    ctx->chain[0] = CPU_BLAKE2B_IVS[0] ^ (ctx->digestlen | (ctx->keylen << 8) | 0x1010000);
-    ctx->chain[1] = CPU_BLAKE2B_IVS[1];
-    ctx->chain[2] = CPU_BLAKE2B_IVS[2];
-    ctx->chain[3] = CPU_BLAKE2B_IVS[3];
-    ctx->chain[4] = CPU_BLAKE2B_IVS[4];
-    ctx->chain[5] = CPU_BLAKE2B_IVS[5];
-    ctx->chain[6] = CPU_BLAKE2B_IVS[6];
-    ctx->chain[7] = CPU_BLAKE2B_IVS[7];
-
-
-    ctx->pos = BLAKE2B_BLOCK_LENGTH;
-}
-
 
 
 __constant__ unsigned char BLAKE2B_SIGMAS[12][16] =
@@ -99,37 +57,37 @@ __constant__ unsigned char BLAKE2B_SIGMAS[12][16] =
         { 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 }
 };
 
-__device__ LONG cuda_blake2b_leuint64(BYTE *in)
+__device__ long cuda_blake2b_leuint64(unsigned char *in)
 {
-    LONG a;
+    long a;
     memcpy(&a, in, 8);
     return a;
 
 /* If memory is not little endian
-BYTE *a = (BYTE *)in;
-return ((LONG)(a[0]) << 0) | ((LONG)(a[1]) << 8) | ((LONG)(a[2]) << 16) | ((LONG)(a[3]) << 24) |((LONG)(a[4]) << 32)
-    | ((LONG)(a[5]) << 40) | ((LONG)(a[6]) << 48) | 	((LONG)(a[7]) << 56);
+unsigned char *a = (unsigned char *)in;
+return ((long)(a[0]) << 0) | ((long)(a[1]) << 8) | ((long)(a[2]) << 16) | ((long)(a[3]) << 24) |((long)(a[4]) << 32)
+    | ((long)(a[5]) << 40) | ((long)(a[6]) << 48) | 	((long)(a[7]) << 56);
  */
 }
 
-__device__ LONG cuda_blake2b_ROTR64(LONG a, BYTE b)
+__device__ long cuda_blake2b_ROTR64(long a, unsigned char b)
 {
     return (a >> b) | (a << (64 - b));
 }
 
-__device__ void cuda_blake2b_G(cuda_blake2b_ctx_t *ctx, int64_t m1, int64_t m2, int32_t a, int32_t b, int32_t c, int32_t d)
+__device__ void cuda_blake2b_G(CUDA_BLAKE2B_CTX *ctx, long m1, long m2, int a, int b, int c, int d)
 {
-    ctx->state[a] = ctx->state[a] + ctx->state[b] + m1;
+    ctx->state[a] += ctx->state[b] + m1;
     ctx->state[d] = cuda_blake2b_ROTR64(ctx->state[d] ^ ctx->state[a], 32);
-    ctx->state[c] = ctx->state[c] + ctx->state[d];
+    ctx->state[c] += ctx->state[d];
     ctx->state[b] = cuda_blake2b_ROTR64(ctx->state[b] ^ ctx->state[c], 24);
-    ctx->state[a] = ctx->state[a] + ctx->state[b] + m2;
+    ctx->state[a] += ctx->state[b] + m2;
     ctx->state[d] = cuda_blake2b_ROTR64(ctx->state[d] ^ ctx->state[a], 16);
-    ctx->state[c] = ctx->state[c] + ctx->state[d];
+    ctx->state[c] += ctx->state[d];
     ctx->state[b] = cuda_blake2b_ROTR64(ctx->state[b] ^ ctx->state[c], 63);
 }
 
-__device__ __forceinline__ void cuda_blake2b_init_state(cuda_blake2b_ctx_t *ctx)
+__device__ __forceinline__ void cuda_blake2b_init_state(CUDA_BLAKE2B_CTX *ctx)
 {
     memcpy(ctx->state, ctx->chain, BLAKE2B_CHAIN_LENGTH);
     for (int i = 0; i < 4; i++)
@@ -141,11 +99,11 @@ __device__ __forceinline__ void cuda_blake2b_init_state(cuda_blake2b_ctx_t *ctx)
     ctx->state[15] = BLAKE2B_IVS[7];
 }
 
-__device__ __forceinline__ void cuda_blake2b_compress(cuda_blake2b_ctx_t *ctx, BYTE* in, WORD inoffset)
+__device__ __forceinline__ void cuda_blake2b_compress(CUDA_BLAKE2B_CTX *ctx, unsigned char *in, unsigned int inoffset)
 {
     cuda_blake2b_init_state(ctx);
 
-    LONG  m[16] = {0};
+    long  m[16] = {0};
     for (int j = 0; j < 16; j++)
         m[j] = cuda_blake2b_leuint64(in + inoffset + (j << 3));
 
@@ -162,12 +120,12 @@ __device__ __forceinline__ void cuda_blake2b_compress(cuda_blake2b_ctx_t *ctx, B
     }
 
     for (int offset = 0; offset < BLAKE2B_CHAIN_SIZE; offset++)
-        ctx->chain[offset] = ctx->chain[offset] ^ ctx->state[offset] ^ ctx->state[offset + 8];
+        ctx->chain[offset] ^= ctx->state[offset] ^ ctx->state[offset + 8];
 }
 
-__device__ void cuda_blake2b_init(cuda_blake2b_ctx_t *ctx, BYTE* key, WORD keylen, WORD digestbitlen)
+__device__ void cuda_blake2b_init(CUDA_BLAKE2B_CTX *ctx, unsigned char* key, unsigned int keylen, unsigned int digestbitlen)
 {
-    memset(ctx, 0, sizeof(cuda_blake2b_ctx_t));
+    memset(ctx, 0, sizeof(CUDA_BLAKE2B_CTX));
 
     ctx->keylen = keylen;
     ctx->digestlen = digestbitlen >> 3;
@@ -189,13 +147,13 @@ __device__ void cuda_blake2b_init(cuda_blake2b_ctx_t *ctx, BYTE* key, WORD keyle
     ctx->pos = BLAKE2B_BLOCK_LENGTH;
 }
 
-__device__ void cuda_blake2b_update(cuda_blake2b_ctx_t *ctx, BYTE* in, LONG inlen)
+__device__ void cuda_blake2b_update(CUDA_BLAKE2B_CTX *ctx, unsigned char* in, long inlen)
 {
     if (inlen == 0)
         return;
 
-    WORD start = 0;
-    int64_t in_index = 0, block_index = 0;
+    unsigned int start = 0;
+    long in_index = 0, block_index = 0;
 
     if (ctx->pos)
     {
@@ -230,7 +188,7 @@ __device__ void cuda_blake2b_update(cuda_blake2b_ctx_t *ctx, BYTE* in, LONG inle
     ctx->pos += inlen - in_index;
 }
 
-__device__ void cuda_blake2b_final(cuda_blake2b_ctx_t *ctx, BYTE* out)
+__device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
 {
     ctx->f0 = 0xFFFFFFFFFFFFFFFFL;
     ctx->t0 += ctx->pos;
@@ -244,55 +202,71 @@ __device__ void cuda_blake2b_final(cuda_blake2b_ctx_t *ctx, BYTE* out)
     int i8 = 0;
     for (int i = 0; i < BLAKE2B_CHAIN_SIZE && ((i8 = i * 8) < ctx->digestlen); i++)
     {
-        BYTE * BYTEs = (BYTE*)(&ctx->chain[i]);
+        unsigned char * tmp = (unsigned char*)(&ctx->chain[i]);
         if (i8 < ctx->digestlen - 8)
-            memcpy(out + i8, BYTEs, 8);
+            memcpy(out + i8, tmp, 8);
         else
-            memcpy(out + i8, BYTEs, ctx->digestlen - i8);
+            memcpy(out + i8, tmp, ctx->digestlen - i8);
     }
 }
 
-__global__ void kernel_blake2b_hash(BYTE* indata, WORD inlen, BYTE* outdata, WORD n_batch, WORD BLAKE2B_BLOCK_SIZE)
-{
-    WORD thread = blockIdx.x * blockDim.x + threadIdx.x;
-    if (thread >= n_batch)
-    {
-        return;
+extern "C" __global__
+void seq_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+    CUDA_BLAKE2B_CTX ctx;
+    const unsigned long k = 0xFEDCBA9876543210UL;
+    cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
+    for (size_t i = 0; i < n; i++) {
+        cuda_blake2b_update(&ctx, &input[i * blockSize], blockSize);
     }
-    BYTE* in = indata  + thread * inlen;
-    BYTE* out = outdata  + thread * BLAKE2B_BLOCK_SIZE;
-    CUDA_BLAKE2B_CTX ctx = c_CTX;
-    //if not precomputed CTX, call cuda_blake2b_init() with key
-    cuda_blake2b_update(&ctx, in, inlen);
-    cuda_blake2b_final(&ctx, out);
+    cuda_blake2b_final(&ctx, output);
 }
-extern "C"
-{
-void mcm_cuda_blake2b_hash_batch(BYTE *key, WORD keylen, BYTE *in, WORD inlen, BYTE *out, WORD n_outbit, WORD n_batch) {
-    BYTE * cuda_indata;
-    BYTE * cuda_outdata;
-    const WORD BLAKE2B_BLOCK_SIZE = (n_outbit >> 3);
-    cudaMalloc(&cuda_indata, inlen * n_batch);
-    cudaMalloc(&cuda_outdata, BLAKE2B_BLOCK_SIZE * n_batch);
+
+extern "C" __global__
+void merkle_pre_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    CUDA_BLAKE2B_CTX ctx;
+    const unsigned long k = 0xFEDCBA9876543210UL;
+
+	if (i < n) {
+        cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
+        cuda_blake2b_update(&ctx, &input[i * blockSize], blockSize);
+    }
+
+	__syncthreads();
+
+	if (i < n)
+        cuda_blake2b_final(&ctx, &output[i * BLAKE2B_OUTBYTES]);
+}
+
+extern "C" __global__
+void merkle_tree_blake2b(unsigned char *output, unsigned char *input, size_t n) {
+    __shared__ unsigned char shMem[512 * BLAKE2B_OUTBYTES];
+	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
+	int locIdx = threadIdx.x;
 
     CUDA_BLAKE2B_CTX ctx;
-    assert(keylen <= 128); // we must define keylen at host
-    cpu_blake2b_init(&ctx, key, keylen, n_outbit);
+    const unsigned long k = 0xFEDCBA9876543210UL;
 
-    cudaMemcpy(cuda_indata, in, inlen * n_batch, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(c_CTX, &ctx, sizeof(CUDA_BLAKE2B_CTX), 0, cudaMemcpyHostToDevice);
+    if (glbIdx < n) {
+        cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
+		cuda_blake2b_update(&ctx, &input[(2*glbIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
+		cuda_blake2b_update(&ctx, &input[(2*glbIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
+        cuda_blake2b_final(&ctx, &shMem[locIdx*BLAKE2B_OUTBYTES]);
+	}
 
-    WORD thread = 256;
-    WORD block = (n_batch + thread - 1) / thread;
+    for (int block = blockDim.x / 2; block >= 1; block /= 2) {
+		if (glbIdx < n && locIdx < block) {
+			cuda_blake2b_update(&ctx, &shMem[(2*locIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
+			cuda_blake2b_update(&ctx, &shMem[(2*locIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
+		}
 
-    kernel_blake2b_hash << < block, thread >> > (cuda_indata, inlen, cuda_outdata, n_batch, BLAKE2B_BLOCK_SIZE);
-    cudaMemcpy(out, cuda_outdata, BLAKE2B_BLOCK_SIZE * n_batch, cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
-    cudaError_t error = cudaGetLastError();
-    if (error != cudaSuccess) {
-        printf("Error cuda blake2b hash: %s \n", cudaGetErrorString(error));
+		__syncthreads();
+
+		if (glbIdx < n && locIdx < block)
+            cuda_blake2b_final(&ctx, &shMem[locIdx*BLAKE2B_OUTBYTES]);
+	}
+
+    if (locIdx == 0) {
+        memcpy(&output[blockIdx.x*(blockDim.x*2)*BLAKE2B_OUTBYTES], shMem, BLAKE2B_OUTBYTES);
     }
-    cudaFree(cuda_indata);
-    cudaFree(cuda_outdata);
-}
 }
