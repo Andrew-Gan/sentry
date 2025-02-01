@@ -130,7 +130,7 @@ class BLAKE2(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self._hasher.digest_size
 
-class StreamGPU(hashing.StreamingHashEngine):
+class SeqGPU(hashing.StreamingHashEngine):
     def __init__(self, hash, ctx, digest_size):
         self.ctx = ctx
         self.hash = hash
@@ -178,7 +178,7 @@ class StreamGPU(hashing.StreamingHashEngine):
     @property
     @override
     def digest_name(self) -> str:
-        return "StreamGPU"
+        return "SeqGPU"
 
     @property
     @override
@@ -217,7 +217,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
         args = [bufferA, contentA, blockSizeA, nThreadA]
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-        block = min(1024 // (self.digestSize // 32), nThread)
+        block = min(512 // (self.digestSize // 32), nThread)
         grid = (nThread + (block-1)) // block
 
         checkCudaErrors(driver.cuLaunchKernel(
@@ -230,7 +230,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
             nThreadA = np.array([nThread], dtype=np.uint64)
             args = [contentA, bufferA, nThreadA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            block = min(1024 // (self.digestSize // 32), nThread)
+            block = min(512 // (self.digestSize // 32), nThread)
             grid = (nThread + (block-1)) // block
 
             checkCudaErrors(driver.cuLaunchKernel(

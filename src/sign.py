@@ -290,12 +290,6 @@ def compile(algo):
     treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_tree_{algo}', 'utf-8')))
     return seqHash, preHash, treeHash, ctx
 
-def uncompile(seqHash, preHash, treeHash, ctx):
-    checkCudaErrors(driver.cuModuleUnload(seqHash))
-    checkCudaErrors(driver.cuModuleUnload(preHash))
-    checkCudaErrors(driver.cuModuleUnload(treeHash))
-    checkCudaErrors(driver.cuCtxDestroy(ctx))
-
 if __name__ == "__main__":
     PATH = './model.pth'
     models = []
@@ -308,26 +302,24 @@ if __name__ == "__main__":
 
     for net in models:
         print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
-        t0 = time.monotonic()
-        torch.save(net, PATH)
-        t1 = time.monotonic()
-        print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.save(net, PATH)
+        # t1 = time.monotonic()
+        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
-        t0 = time.monotonic()
-        torch.load(PATH, weights_only=False)
-        t1 = time.monotonic()
-        print(f'Read from file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.load(PATH, weights_only=False)
+        # t1 = time.monotonic()
+        # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for algo in ['keccak']:
+        for algo in ['sha256', 'blake2b', 'keccak']:
             seq, pre, tree, ctx = compile(algo)
 
             # print('Hashing from file using SHA256')
             # sign_files(PATH, memory.SHA256())
 
-            # print(f'Hashing from device using StreamGPU-{algo}')
-            # sign_model(net, memory.StreamGPU(seq, ctx, 32))
+            # print(f'Hashing from device using Seq-{algo}')
+            # sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
-            print(f'Hashing from device using MerkleGPU-{algo}')
+            print(f'Hashing from device using Merkle-{algo}')
             sign_model(net, memory.MerkleGPU(pre, tree, ctx, 32))
-
-            uncompile(seq, pre, tree, ctx)

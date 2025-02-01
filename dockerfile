@@ -1,5 +1,5 @@
 FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
-RUN apt update && apt install -y git python3-pip unzip wget
+RUN apt update && apt install -y python3-pip
 RUN pip install --break-system-packages typing_extensions protobuf \
     sigstore sigstore_protobuf_specs cuda-python in_toto_attestation \
     cryptography certifi pyopenssl huggingface_hub transformers sentencepiece \
