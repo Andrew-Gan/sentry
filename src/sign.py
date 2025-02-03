@@ -271,7 +271,7 @@ def compile(algo):
     major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
     minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-    opts = [b'--fmad=false', arch_arg]
+    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda']
 
     with open('model_signing/cuda/%s.cu' % algo, 'r') as f:
         code = f.read()
@@ -289,6 +289,7 @@ def compile(algo):
     preHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_pre_{algo}', 'utf-8')))
     treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_tree_{algo}', 'utf-8')))
     return seqHash, preHash, treeHash, ctx
+
 
 if __name__ == "__main__":
     PATH = './model.pth'
@@ -313,6 +314,7 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for algo in ['sha256', 'blake2b', 'keccak']:
+            print(f'Compiling {algo}')
             seq, pre, tree, ctx = compile(algo)
 
             # print('Hashing from file using SHA256')

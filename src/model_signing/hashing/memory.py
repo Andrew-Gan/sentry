@@ -192,7 +192,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.pre = pre
         self.hash = hash
         self.digestSize = digest_size
-    
+
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
         self.digest = bytes(self.digestSize)
@@ -230,12 +230,11 @@ class MerkleGPU(hashing.StreamingHashEngine):
             nThreadA = np.array([nThread], dtype=np.uint64)
             args = [contentA, bufferA, nThreadA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            block = min(512 // (self.digestSize // 32), nThread)
+            block = min(512, nThread)
             grid = (nThread + (block-1)) // block
 
             checkCudaErrors(driver.cuLaunchKernel(
-                self.hash, grid, 1, 1, block, 1, 1,
-                0, stream, args.ctypes.data, 0,
+                self.hash, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
             ))
             checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
                 2*1024*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))

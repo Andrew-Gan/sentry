@@ -13,7 +13,7 @@
  */
 
 /****************************** MACROS ******************************/
-#define SHA256_BLOCK_SIZE 32            // SHA256 outputs a 32 byte digest
+#include "_common.cuh"
 
 /**************************** DATA TYPES ****************************/
 
@@ -170,57 +170,21 @@ __device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, unsigned char hash[])
 extern "C" __global__
 void seq_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
 	CUDA_SHA256_CTX ctx;
-	cuda_sha256_init(&ctx);
-	for (size_t i = 0; i < n; i++) {
-		cuda_sha256_update(&ctx, input + i * blockSize, blockSize);
-	}
-	cuda_sha256_final(&ctx, output);
+	sequential(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, output,
+		input, blockSize, n);
 }
 
-// first mapping of blocks to digests at the leaves layer
 extern "C" __global__
 void merkle_pre_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-  	int i = blockIdx.x * blockDim.x + threadIdx.x;
-
-	CUDA_SHA256_CTX ctx;
-	if (i < n) {
-		cuda_sha256_init(&ctx);
-		cuda_sha256_update(&ctx, input + i * blockSize, blockSize);
-	}
-
-	__syncthreads();
-
-	if (i < n)
-		cuda_sha256_final(&ctx, &output[i * SHA256_BLOCK_SIZE]);
+  	CUDA_SHA256_CTX ctx;
+	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, output,
+		input, blockSize, n);
 }
 
-// // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_tree_sha256(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[1024 * SHA256_BLOCK_SIZE];
-	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	int locIdx = threadIdx.x;
-
+	__shared__ unsigned char shMem[512 * OUTBYTES];
 	CUDA_SHA256_CTX ctx;
-	if (glbIdx < n) {
-		cuda_sha256_init(&ctx);
-		cuda_sha256_update(&ctx, &input[(2*glbIdx)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
-		cuda_sha256_update(&ctx, &input[(2*glbIdx+1)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
-		cuda_sha256_final(&ctx, &shMem[locIdx*SHA256_BLOCK_SIZE]);
-	}
-	
-	for (int block = 512; block >= 1; block /= 2) {
-		if (glbIdx < n && locIdx < block) {
-			cuda_sha256_update(&ctx, &shMem[(2*locIdx)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
-			cuda_sha256_update(&ctx, &shMem[(2*locIdx+1)*SHA256_BLOCK_SIZE], SHA256_BLOCK_SIZE);
-		}
-
-		__syncthreads();
-
-		if (glbIdx < n && locIdx < block)
-			cuda_sha256_final(&ctx, &shMem[locIdx*SHA256_BLOCK_SIZE]);
-	}
-
-  if (locIdx == 0)
-    memcpy(&output[blockIdx.x*2048*SHA256_BLOCK_SIZE], shMem, SHA256_BLOCK_SIZE);
+	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, shMem,
+		output, input, n);
 }

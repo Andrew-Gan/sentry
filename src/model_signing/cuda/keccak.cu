@@ -7,10 +7,11 @@
  * This file is released into the Public Domain.
  */
 
+#include "_common.cuh"
+
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
-#define KECCAK_OUTBYTES 32
 
 __constant__ unsigned long CUDA_KECCAK_CONSTS[24] = {
     0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
@@ -22,7 +23,6 @@ __constant__ unsigned long CUDA_KECCAK_CONSTS[24] = {
 };
 
 typedef struct {
-
     unsigned char sha3_flag;
     unsigned int digestbitlen;
     unsigned long rate_bits;
@@ -33,7 +33,6 @@ typedef struct {
     unsigned char q[KECCAK_Q_SIZE];
 
     unsigned long bits_in_queue;
-
 } CUDA_KECCAK_CTX;
 
 __device__ unsigned long cuda_keccak_leuint64(void *in)
@@ -244,24 +243,15 @@ __device__ void cuda_keccak_pad(CUDA_KECCAK_CTX *ctx)
 /*
  * Digestbitlen must be 128 224 256 288 384 512
  */
-__device__ void cuda_keccak_init(CUDA_KECCAK_CTX *ctx, unsigned int digestbitlen)
+__device__ void cuda_keccak_init(CUDA_KECCAK_CTX *ctx)
 {
     memset(ctx, 0, sizeof(CUDA_KECCAK_CTX));
     ctx->sha3_flag = 0;
-    ctx->digestbitlen = digestbitlen;
+    ctx->digestbitlen = (OUTBYTES << 3);
     ctx->rate_bits = 1600 - ((ctx->digestbitlen) << 1);
     ctx->rate_bytes = ctx->rate_bits >> 3;
     ctx->absorb_round = ctx->rate_bits >> 6;
     ctx->bits_in_queue = 0;
-}
-
-/*
- * Digestbitlen must be 224 256 384 512
- */
-__device__ void cuda_keccak_sha3_init(CUDA_KECCAK_CTX *ctx, unsigned int digestbitlen)
-{
-    cuda_keccak_init(ctx, digestbitlen);
-    ctx->sha3_flag = 1;
 }
 
 __device__ void cuda_keccak_update(CUDA_KECCAK_CTX *ctx, unsigned char *in, unsigned long inlen)
@@ -318,57 +308,23 @@ __device__ void cuda_keccak_final(CUDA_KECCAK_CTX *ctx, unsigned char *out)
 extern "C" __global__
 void seq_keccak(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
     CUDA_KECCAK_CTX ctx;
-    cuda_keccak_init(&ctx, (unsigned int)(KECCAK_OUTBYTES << 3));
-    for (size_t i = 0; i < n; i++) {
-        cuda_keccak_update(&ctx, input + i * blockSize, blockSize);
-    }
-    cuda_keccak_final(&ctx, output);
+	sequential(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
+        output, input, blockSize, n);
 }
 
+// first mapping of blocks to digests at the leaves layer
 extern "C" __global__
 void merkle_pre_keccak(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    CUDA_KECCAK_CTX ctx;
-
-	if (i < n) {
-        cuda_keccak_init(&ctx, (unsigned int)(KECCAK_OUTBYTES << 3));
-        cuda_keccak_update(&ctx, input + i * blockSize, blockSize);
-    }
-
-	__syncthreads();
-
-	if (i < n)
-        cuda_keccak_final(&ctx, &output[i * KECCAK_OUTBYTES]);
+  	CUDA_KECCAK_CTX ctx;
+    merkle_pre(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
+        output, input, blockSize, n);
 }
 
+// // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_tree_keccak(unsigned char *output, unsigned char *input, size_t n) {
-    __shared__ unsigned char shMem[512 * KECCAK_OUTBYTES];
-	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	int locIdx = threadIdx.x;
-
+	__shared__ unsigned char shMem[512 * OUTBYTES];
     CUDA_KECCAK_CTX ctx;
-
-    if (glbIdx < n) {
-        cuda_keccak_init(&ctx, (unsigned int)(KECCAK_OUTBYTES << 3));
-		cuda_keccak_update(&ctx, &input[(2*glbIdx)*KECCAK_OUTBYTES], KECCAK_OUTBYTES);
-		cuda_keccak_update(&ctx, &input[(2*glbIdx+1)*KECCAK_OUTBYTES], KECCAK_OUTBYTES);
-        cuda_keccak_final(&ctx, &shMem[locIdx*KECCAK_OUTBYTES]);
-	}
-
-    for (int block = blockDim.x / 2; block >= 1; block /= 2) {
-		if (glbIdx < n && locIdx < block) {
-			cuda_keccak_update(&ctx, &shMem[(2*locIdx)*KECCAK_OUTBYTES], KECCAK_OUTBYTES);
-			cuda_keccak_update(&ctx, &shMem[(2*locIdx+1)*KECCAK_OUTBYTES], KECCAK_OUTBYTES);
-		}
-
-		__syncthreads();
-
-		if (glbIdx < n && locIdx < block)
-            cuda_keccak_final(&ctx, &shMem[locIdx*KECCAK_OUTBYTES]);
-	}
-
-    if (locIdx == 0) {
-        memcpy(&output[blockIdx.x*(blockDim.x*2)*KECCAK_OUTBYTES], shMem, KECCAK_OUTBYTES);
-    }
+	merkle_step(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
+        shMem, output, input, n);
 }

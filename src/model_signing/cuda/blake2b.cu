@@ -7,16 +7,15 @@
  * This file is released into the Public Domain.
  */
 
+#include "_common.cuh"
+
 #define BLAKE2B_ROUNDS 12
 #define BLAKE2B_BLOCK_LENGTH 128
 #define BLAKE2B_CHAIN_SIZE 8
 #define BLAKE2B_CHAIN_LENGTH (BLAKE2B_CHAIN_SIZE * sizeof(long))
 #define BLAKE2B_STATE_SIZE 16
 #define BLAKE2B_STATE_LENGTH (BLAKE2B_STATE_SIZE * sizeof(long))
-#define BLAKE2B_OUTBYTES 32
 
-extern "C"
-{
 typedef struct {
     unsigned int digestlen;
     unsigned char key[64];
@@ -31,7 +30,6 @@ typedef struct {
     long t1;
     long f0;
 } CUDA_BLAKE2B_CTX;
-}
 
 __constant__ long BLAKE2B_IVS[8] =
 {
@@ -123,12 +121,14 @@ __device__ __forceinline__ void cuda_blake2b_compress(CUDA_BLAKE2B_CTX *ctx, uns
         ctx->chain[offset] ^= ctx->state[offset] ^ ctx->state[offset + 8];
 }
 
-__device__ void cuda_blake2b_init(CUDA_BLAKE2B_CTX *ctx, unsigned char* key, unsigned int keylen, unsigned int digestbitlen)
+__device__ void cuda_blake2b_init(CUDA_BLAKE2B_CTX *ctx)
 {
     memset(ctx, 0, sizeof(CUDA_BLAKE2B_CTX));
+    const unsigned long key = 0xFEDCBA9876543210UL;
+    const unsigned long keylen = sizeof(key);
 
     ctx->keylen = keylen;
-    ctx->digestlen = digestbitlen >> 3;
+    ctx->digestlen = OUTBYTES >> 3;
     ctx->pos = 0;
     ctx->t0 = 0;
     ctx->t1 = 0;
@@ -142,8 +142,8 @@ __device__ void cuda_blake2b_init(CUDA_BLAKE2B_CTX *ctx, unsigned char* key, uns
     ctx->chain[6] = BLAKE2B_IVS[6];
     ctx->chain[7] = BLAKE2B_IVS[7];
 
-    memcpy(ctx->buff, key, keylen);
-    memcpy(ctx->key, key, keylen);
+    memcpy(ctx->buff, &key, keylen);
+    memcpy(ctx->key, &key, keylen);
     ctx->pos = BLAKE2B_BLOCK_LENGTH;
 }
 
@@ -213,60 +213,23 @@ __device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
 extern "C" __global__
 void seq_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
     CUDA_BLAKE2B_CTX ctx;
-    const unsigned long k = 0xFEDCBA9876543210UL;
-    cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
-    for (size_t i = 0; i < n; i++) {
-        cuda_blake2b_update(&ctx, &input[i * blockSize], blockSize);
-    }
-    cuda_blake2b_final(&ctx, output);
+	sequential(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final,
+        output, input, blockSize, n);
 }
 
+// first mapping of blocks to digests at the leaves layer
 extern "C" __global__
 void merkle_pre_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
     CUDA_BLAKE2B_CTX ctx;
-    const unsigned long k = 0xFEDCBA9876543210UL;
-
-	if (i < n) {
-        cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
-        cuda_blake2b_update(&ctx, &input[i * blockSize], blockSize);
-    }
-
-	__syncthreads();
-
-	if (i < n)
-        cuda_blake2b_final(&ctx, &output[i * BLAKE2B_OUTBYTES]);
+  	merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final,
+        output, input, blockSize, n);
 }
 
+// // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_tree_blake2b(unsigned char *output, unsigned char *input, size_t n) {
-    __shared__ unsigned char shMem[512 * BLAKE2B_OUTBYTES];
-	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	int locIdx = threadIdx.x;
-
+	__shared__ unsigned char shMem[512 * OUTBYTES];
     CUDA_BLAKE2B_CTX ctx;
-    const unsigned long k = 0xFEDCBA9876543210UL;
-
-    if (glbIdx < n) {
-        cuda_blake2b_init(&ctx, (unsigned char*)&k, 8, BLAKE2B_OUTBYTES);
-		cuda_blake2b_update(&ctx, &input[(2*glbIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
-		cuda_blake2b_update(&ctx, &input[(2*glbIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
-        cuda_blake2b_final(&ctx, &shMem[locIdx*BLAKE2B_OUTBYTES]);
-	}
-
-    for (int block = blockDim.x / 2; block >= 1; block /= 2) {
-		if (glbIdx < n && locIdx < block) {
-			cuda_blake2b_update(&ctx, &shMem[(2*locIdx)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
-			cuda_blake2b_update(&ctx, &shMem[(2*locIdx+1)*BLAKE2B_OUTBYTES], BLAKE2B_OUTBYTES);
-		}
-
-		__syncthreads();
-
-		if (glbIdx < n && locIdx < block)
-            cuda_blake2b_final(&ctx, &shMem[locIdx*BLAKE2B_OUTBYTES]);
-	}
-
-    if (locIdx == 0) {
-        memcpy(&output[blockIdx.x*(blockDim.x*2)*BLAKE2B_OUTBYTES], shMem, BLAKE2B_OUTBYTES);
-    }
+	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final,
+        shMem, output, input, n);
 }
