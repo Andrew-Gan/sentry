@@ -45,6 +45,7 @@ from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 import collections
 import math
+import torch
 
 
 def _cudaGetErrorEnum(error):
@@ -130,6 +131,7 @@ class BLAKE2(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self._hasher.digest_size
 
+
 class SeqGPU(hashing.StreamingHashEngine):
     def __init__(self, hash, ctx, digest_size):
         self.ctx = ctx
@@ -198,38 +200,43 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         total_size = sum(d.nbytes for d in data.values())
-        nThread = (total_size + (blockSize-1)) // blockSize
-        nThread = 2**math.ceil(math.log2(nThread))
 
-        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         stream = checkCudaErrors(runtime.cudaStreamCreate())
-        i = 0
-        # for v in data.values():
-        #     checkCudaErrors(runtime.cudaMemcpy(content+i, v.data_ptr(),
-        #         v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
-        #     i += v.nbytes
-        # 500 ms in runtime
+        nThread = 0
+        starts = []
+        workload = []
+        for v in data.values():
+            t = (v.nbytes + (blockSize-1)) // blockSize
+            starts.append(nThread)
+            workload.append(v.data_ptr())
+            nThread += t
+        starts = torch.tensor(starts, device='cuda')
+        workload = torch.tensor(workload, device='cuda')
+        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
 
-        buffer = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
         contentA = np.array([content], dtype=np.uint64)
-        nThreadA = np.array([nThread], dtype=np.uint64)
-        bufferA = np.array([buffer], dtype=np.uint64)
         blockSizeA = np.array([blockSize], dtype=np.uint64)
+        startsA = np.array([starts.data_ptr()], dtype=np.uint64)
+        workloadA = np.array([workload.data_ptr()], dtype=np.uint64)
+        lA = np.array([len(starts)], dtype=np.uint64)
+        nA = np.array([nThread], dtype=np.uint64)
 
-        args = [bufferA, contentA, blockSizeA, nThreadA]
+        args = [contentA, blockSizeA, startsA, workloadA, lA, nA]
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+
         block = min(512 // (self.digestSize // 32), nThread)
         grid = (nThread + (block-1)) // block
 
         checkCudaErrors(driver.cuLaunchKernel(
-            self.pre, grid, 1, 1, block, 1, 1,
-            0, stream, args.ctypes.data, 0,
+            self.pre, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
         nThread //= 2
+        checkCudaErrors(runtime.cudaDeviceSynchronize())
+        return
 
         while nThread > 0:
             nThreadA = np.array([nThread], dtype=np.uint64)
-            args = [contentA, bufferA, nThreadA]
+            args = [contentA, nThreadA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
