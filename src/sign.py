@@ -295,11 +295,11 @@ if __name__ == "__main__":
     PATH = './model.pth'
     models = []
     models.append(torch.hub.load('pytorch/vision:v0.10.0', 'resnet152', pretrained=True))
-    # models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
-    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
-    # models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
-    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
-    # models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
+    models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
+    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
+    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
 
     for net in models:
         print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
@@ -314,14 +314,13 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for algo in ['sha256', 'blake2b', 'keccak']:
-            print(f'Compiling {algo}')
             seq, pre, tree, ctx = compile(algo)
 
             # print('Hashing from file using SHA256')
             # sign_files(PATH, memory.SHA256())
 
-            # print(f'Hashing from device using Seq-{algo}')
+            # print(f'SeqGPU-{algo}')
             # sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
-            print(f'Hashing from device using Merkle-{algo}')
+            print(f'MerkleGPU-{algo}')
             sign_model(net, memory.MerkleGPU(pre, tree, ctx, 32))

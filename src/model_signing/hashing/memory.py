@@ -234,11 +234,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
             grid = (nThread + (block-1)) // block
 
             checkCudaErrors(driver.cuLaunchKernel(
-                self.hash, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
+                self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
+                stream, args.ctypes.data, 0,
             ))
             checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
-                2*1024*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
-            nThread //= 2048
+                2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            nThread //= 2 * block
 
         checkCudaErrors(runtime.cudaMemcpy(self.digest, buffer, self.digestSize,
             runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))

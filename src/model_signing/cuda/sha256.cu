@@ -183,7 +183,7 @@ void merkle_pre_sha256(unsigned char *output, unsigned char *input, size_t block
 
 extern "C" __global__
 void merkle_tree_sha256(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[512 * OUTBYTES];
+	extern __shared__ unsigned char shMem[];
 	CUDA_SHA256_CTX ctx;
 	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, shMem,
 		output, input, n);
