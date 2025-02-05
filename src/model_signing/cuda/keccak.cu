@@ -23,14 +23,14 @@ __constant__ unsigned long CUDA_KECCAK_CONSTS[24] = {
 };
 
 typedef struct {
-    unsigned char sha3_flag;
+    uint8_t sha3_flag;
     unsigned int digestbitlen;
     unsigned long rate_bits;
     unsigned long rate_bytes;
     unsigned long absorb_round;
 
     long state[KECCAK_STATE_SIZE];
-    unsigned char q[KECCAK_Q_SIZE];
+    uint8_t q[KECCAK_Q_SIZE];
 
     unsigned long bits_in_queue;
 } CUDA_KECCAK_CTX;
@@ -197,7 +197,7 @@ __device__ void cuda_keccak_permutations(CUDA_KECCAK_CTX * ctx)
 }
 
 
-__device__ void cuda_keccak_absorb(CUDA_KECCAK_CTX *ctx, unsigned char* in)
+__device__ void cuda_keccak_absorb(CUDA_KECCAK_CTX *ctx, uint8_t* in)
 {
 
     unsigned long offset = 0;
@@ -254,7 +254,7 @@ __device__ void cuda_keccak_init(CUDA_KECCAK_CTX *ctx)
     ctx->bits_in_queue = 0;
 }
 
-__device__ void cuda_keccak_update(CUDA_KECCAK_CTX *ctx, unsigned char *in, unsigned long inlen)
+__device__ void cuda_keccak_update(CUDA_KECCAK_CTX *ctx, uint8_t *in, unsigned long inlen)
 {
     long bytes = ctx->bits_in_queue >> 3;
     long count = 0;
@@ -280,11 +280,11 @@ __device__ void cuda_keccak_update(CUDA_KECCAK_CTX *ctx, unsigned char *in, unsi
     ctx->bits_in_queue = bytes << 3;
 }
 
-__device__ void cuda_keccak_final(CUDA_KECCAK_CTX *ctx, unsigned char *out)
+__device__ void cuda_keccak_final(CUDA_KECCAK_CTX *ctx, uint8_t *out)
 {
     if (ctx->sha3_flag) {
         int mask = (1 << 2) - 1;
-        ctx->q[ctx->bits_in_queue >> 3] = (unsigned char)(0x02 & mask);
+        ctx->q[ctx->bits_in_queue >> 3] = (uint8_t)(0x02 & mask);
         ctx->bits_in_queue += 2;
     }
 
@@ -306,25 +306,24 @@ __device__ void cuda_keccak_final(CUDA_KECCAK_CTX *ctx, unsigned char *out)
 }
 
 extern "C" __global__
-void seq_keccak(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void seq_keccak(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
     CUDA_KECCAK_CTX ctx;
-	sequential(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
-        output, input, blockSize, n);
+	sequential(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final);
 }
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_pre_keccak(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void merkle_pre_keccak(uint8_t *out, uint64_t blockSize, uint64_t *start,
+	uint8_t **workload, uint64_t l, uint64_t n) {
+
   	CUDA_KECCAK_CTX ctx;
-    merkle_pre(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
-        output, input, blockSize, n);
+    merkle_pre(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final);
 }
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_tree_keccak(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[512 * OUTBYTES];
+void merkle_tree_keccak(uint8_t *out, uint8_t *in, uint64_t n) {
+	__shared__ uint8_t shMem[512 * OUTBYTES];
     CUDA_KECCAK_CTX ctx;
-	merkle_step(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final,
-        shMem, output, input, n);
+	merkle_step(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final);
 }

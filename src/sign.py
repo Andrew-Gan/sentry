@@ -314,6 +314,7 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for algo in ['sha256', 'blake2b', 'keccak']:
+            print(f'Compiling {algo}')
             seq, pre, tree, ctx = compile(algo)
 
             # print('Hashing from file using SHA256')

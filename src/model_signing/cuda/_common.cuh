@@ -2,35 +2,36 @@
 #define __COMMON_CUH__
 
 #define OUTBYTES 32
+#define uint8_t unsigned char
+#define uint64_t unsigned long
 
-#define sequential(init, update, final, output, input, blockSize, n) { \
-    const unsigned long k = 0xFEDCBA9876543210UL; \
+#define sequential(init, update, final) { \
     init(&ctx); \
-    for (size_t i = 0; i < n; i++) { \
-        update(&ctx, &input[i * blockSize], blockSize); \
+    for (uint64_t i = 0; i < n; i++) { \
+        update(&ctx, &in[i * blockSize], blockSize); \
     } \
-    final(&ctx, output); \
+    final(&ctx, out); \
 } \
 
-#define merkle_pre(init, update, final, output, input, blockSize, n) { \
-    int i = blockIdx.x * blockDim.x + threadIdx.x; \
-    const unsigned long k = 0xFEDCBA9876543210UL; \
-	if (i < n) { \
+#define merkle_pre(init, update, final) { \
+    uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
+	uint8_t *my_in = in + idx * blockSize; \
+	if (idx < n) { \
         init(&ctx); \
-        update(&ctx, &input[i * blockSize], blockSize); \
+        update(&ctx, my_in, blockSize); \
     } \
 	__syncthreads(); \
-	if (i < n) \
-        final(&ctx, &output[i * OUTBYTES]); \
+	if (idx < n) \
+        final(&ctx, &out[idx * OUTBYTES]); \
 } \
 
-#define merkle_step(init, update, final, shMem, output, input, n) { \
+#define merkle_step(init, update, final) { \
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x; \
 	int locIdx = threadIdx.x; \
     if (glbIdx < n) { \
         init(&ctx); \
-		update(&ctx, &input[(2*glbIdx)*OUTBYTES], OUTBYTES); \
-		update(&ctx, &input[(2*glbIdx+1)*OUTBYTES], OUTBYTES); \
+		update(&ctx, &in[(2*glbIdx)*OUTBYTES], OUTBYTES); \
+		update(&ctx, &in[(2*glbIdx+1)*OUTBYTES], OUTBYTES); \
         final(&ctx, &shMem[locIdx*OUTBYTES]); \
 	} \
     for (int block = blockDim.x / 2; block >= 1; block /= 2) { \
@@ -43,7 +44,7 @@
             final(&ctx, &shMem[locIdx*OUTBYTES]); \
 	} \
     if (locIdx == 0) { \
-        memcpy(&output[blockIdx.x*(blockDim.x*2)*OUTBYTES], shMem, OUTBYTES); \
+        memcpy(&out[blockIdx.x*(blockDim.x*2)*OUTBYTES], shMem, OUTBYTES); \
     } \
 } \
 

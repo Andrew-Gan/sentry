@@ -204,10 +204,11 @@ class MerkleGPU(hashing.StreamingHashEngine):
         content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         stream = checkCudaErrors(runtime.cudaStreamCreate())
         i = 0
-        for v in data.values():
-            checkCudaErrors(runtime.cudaMemcpy(content+i, v.data_ptr(),
-                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
-            i += v.nbytes
+        # for v in data.values():
+        #     checkCudaErrors(runtime.cudaMemcpy(content+i, v.data_ptr(),
+        #         v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+        #     i += v.nbytes
+        # 500 ms in runtime
 
         buffer = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
         contentA = np.array([content], dtype=np.uint64)
