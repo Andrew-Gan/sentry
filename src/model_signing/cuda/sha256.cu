@@ -18,9 +18,9 @@
 /**************************** DATA TYPES ****************************/
 
 typedef struct {
-	unsigned char data[64];
+	uint8_t data[64];
 	unsigned int datalen;
-	unsigned long long bitlen;
+	uint64_t bitlen;
 	unsigned int state[8];
 } CUDA_SHA256_CTX;
 
@@ -51,7 +51,7 @@ __constant__ unsigned int k[64] = {
 };
 
 /*********************** FUNCTION DEFINITIONS ***********************/
-__device__  __forceinline__ void cuda_sha256_transform(CUDA_SHA256_CTX *ctx, const unsigned char data[])
+__device__  __forceinline__ void cuda_sha256_transform(CUDA_SHA256_CTX *ctx, const uint8_t data[])
 {
 	unsigned int a, b, c, d, e, f, g, h, i, j, t1, t2, m[64];
 
@@ -106,7 +106,7 @@ __device__ void cuda_sha256_init(CUDA_SHA256_CTX *ctx)
 	ctx->state[7] = 0x5be0cd19;
 }
 
-__device__ void cuda_sha256_update(CUDA_SHA256_CTX *ctx, const unsigned char data[], size_t len)
+__device__ void cuda_sha256_update(CUDA_SHA256_CTX *ctx, const uint8_t data[], uint64_t len)
 {
 	unsigned int i;
 
@@ -121,7 +121,7 @@ __device__ void cuda_sha256_update(CUDA_SHA256_CTX *ctx, const unsigned char dat
 	}
 }
 
-__device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, unsigned char hash[])
+__device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, uint8_t hash[])
 {
 	unsigned int i;
 
@@ -154,7 +154,7 @@ __device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, unsigned char hash[])
 	cuda_sha256_transform(ctx, ctx->data);
 
 	// Since this implementation uses little endian byte ordering and SHA uses big endian,
-	// reverse all the bytes when copying the final state to the output hash.
+	// reverse all the bytes when copying the final state to the out hash.
 	for (i = 0; i < 4; ++i) {
 		hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
 		hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
@@ -168,23 +168,20 @@ __device__ void cuda_sha256_final(CUDA_SHA256_CTX *ctx, unsigned char hash[])
 }
 
 extern "C" __global__
-void seq_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void seq_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 	CUDA_SHA256_CTX ctx;
-	sequential(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, output,
-		input, blockSize, n);
+	sequential(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
 }
 
 extern "C" __global__
-void merkle_pre_sha256(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
-  	CUDA_SHA256_CTX ctx;
-	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, output,
-		input, blockSize, n);
+void merkle_pre_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
+	CUDA_SHA256_CTX ctx;
+	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
 }
 
 extern "C" __global__
-void merkle_tree_sha256(unsigned char *output, unsigned char *input, size_t n) {
-	extern __shared__ unsigned char shMem[];
+void merkle_tree_sha256(uint8_t *out, uint8_t *in, size_t n) {
+	extern __shared__ uint8_t shMem[];
 	CUDA_SHA256_CTX ctx;
-	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, shMem,
-		output, input, n);
+	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
 }
