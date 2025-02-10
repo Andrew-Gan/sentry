@@ -15,7 +15,12 @@
 
 #define merkle_pre(init, update, final) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
-	uint8_t *my_in = in + idx * blockSize; \
+	uint64_t workId = 0; \
+	while (workId < l && idx >= starts[workId]) { \
+		workId++; \
+	} \
+	workId--; \
+	uint8_t *my_in = workload[workId]; \
 	if (idx < n) { \
         init(&ctx); \
         update(&ctx, my_in, blockSize); \

@@ -213,6 +213,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         starts = torch.tensor(starts, device='cuda')
         workload = torch.tensor(workload, device='cuda')
         content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
+        buffer = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
 
         contentA = np.array([content], dtype=np.uint64)
         blockSizeA = np.array([blockSize], dtype=np.uint64)
@@ -231,8 +232,6 @@ class MerkleGPU(hashing.StreamingHashEngine):
             self.pre, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
         nThread //= 2
-        checkCudaErrors(runtime.cudaDeviceSynchronize())
-        return
 
         while nThread > 0:
             nThreadA = np.array([nThread], dtype=np.uint64)
@@ -241,12 +240,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
 
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-            checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
-                2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            # checkCudaErrors(driver.cuLaunchKernel(
+            #     self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
+            #     stream, args.ctypes.data, 0,
+            # ))
+            # checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
+            #     2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
             nThread //= 2 * block
 
         checkCudaErrors(runtime.cudaMemcpy(self.digest, buffer, self.digestSize,

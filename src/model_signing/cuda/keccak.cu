@@ -313,7 +313,7 @@ void seq_keccak(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_pre_keccak(uint8_t *out, uint64_t blockSize, uint64_t *start,
+void merkle_pre_keccak(uint8_t *out, uint64_t blockSize, uint64_t *starts,
 	uint8_t **workload, uint64_t l, uint64_t n) {
 
   	CUDA_KECCAK_CTX ctx;
@@ -323,7 +323,7 @@ void merkle_pre_keccak(uint8_t *out, uint64_t blockSize, uint64_t *start,
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_tree_keccak(uint8_t *out, uint8_t *in, uint64_t n) {
-	__shared__ uint8_t shMem[512 * OUTBYTES];
+	extern __shared__ uint8_t shMem[];
     CUDA_KECCAK_CTX ctx;
 	merkle_step(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final);
 }

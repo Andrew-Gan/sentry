@@ -18,10 +18,10 @@
 
 typedef struct {
     unsigned int digestlen;
-    unsigned char key[64];
+    uint8_t key[64];
     unsigned int keylen;
 
-    unsigned char buff[BLAKE2B_BLOCK_LENGTH];
+    uint8_t buff[BLAKE2B_BLOCK_LENGTH];
     long chain[BLAKE2B_CHAIN_SIZE];
     long state[BLAKE2B_STATE_SIZE];
 
@@ -39,7 +39,7 @@ __constant__ long BLAKE2B_IVS[8] =
 };
 
 
-__constant__ unsigned char BLAKE2B_SIGMAS[12][16] =
+__constant__ uint8_t BLAKE2B_SIGMAS[12][16] =
 {
         { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 },
         { 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 },
@@ -55,20 +55,20 @@ __constant__ unsigned char BLAKE2B_SIGMAS[12][16] =
         { 14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3 }
 };
 
-__device__ long cuda_blake2b_leuint64(unsigned char *in)
+__device__ long cuda_blake2b_leuint64(uint8_t *in)
 {
     long a;
     memcpy(&a, in, 8);
     return a;
 
 /* If memory is not little endian
-unsigned char *a = (unsigned char *)in;
+uint8_t *a = (uint8_t *)in;
 return ((long)(a[0]) << 0) | ((long)(a[1]) << 8) | ((long)(a[2]) << 16) | ((long)(a[3]) << 24) |((long)(a[4]) << 32)
     | ((long)(a[5]) << 40) | ((long)(a[6]) << 48) | 	((long)(a[7]) << 56);
  */
 }
 
-__device__ long cuda_blake2b_ROTR64(long a, unsigned char b)
+__device__ long cuda_blake2b_ROTR64(long a, uint8_t b)
 {
     return (a >> b) | (a << (64 - b));
 }
@@ -97,7 +97,7 @@ __device__ __forceinline__ void cuda_blake2b_init_state(CUDA_BLAKE2B_CTX *ctx)
     ctx->state[15] = BLAKE2B_IVS[7];
 }
 
-__device__ __forceinline__ void cuda_blake2b_compress(CUDA_BLAKE2B_CTX *ctx, unsigned char *in, unsigned int inoffset)
+__device__ __forceinline__ void cuda_blake2b_compress(CUDA_BLAKE2B_CTX *ctx, uint8_t *in, unsigned int inoffset)
 {
     cuda_blake2b_init_state(ctx);
 
@@ -147,7 +147,7 @@ __device__ void cuda_blake2b_init(CUDA_BLAKE2B_CTX *ctx)
     ctx->pos = BLAKE2B_BLOCK_LENGTH;
 }
 
-__device__ void cuda_blake2b_update(CUDA_BLAKE2B_CTX *ctx, unsigned char* in, long inlen)
+__device__ void cuda_blake2b_update(CUDA_BLAKE2B_CTX *ctx, uint8_t* in, long inlen)
 {
     if (inlen == 0)
         return;
@@ -188,7 +188,7 @@ __device__ void cuda_blake2b_update(CUDA_BLAKE2B_CTX *ctx, unsigned char* in, lo
     ctx->pos += inlen - in_index;
 }
 
-__device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
+__device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, uint8_t* out)
 {
     ctx->f0 = 0xFFFFFFFFFFFFFFFFL;
     ctx->t0 += ctx->pos;
@@ -202,7 +202,7 @@ __device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
     int i8 = 0;
     for (int i = 0; i < BLAKE2B_CHAIN_SIZE && ((i8 = i * 8) < ctx->digestlen); i++)
     {
-        unsigned char * tmp = (unsigned char*)(&ctx->chain[i]);
+        uint8_t * tmp = (uint8_t*)(&ctx->chain[i]);
         if (i8 < ctx->digestlen - 8)
             memcpy(out + i8, tmp, 8);
         else
@@ -211,14 +211,14 @@ __device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
 }
 
 extern "C" __global__
-void seq_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void seq_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
     CUDA_BLAKE2B_CTX ctx;
 	sequential(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_pre_sha256(uint8_t *out, uint64_t blockSize, uint64_t *start,
+void merkle_pre_blake2b(uint8_t *out, uint64_t blockSize, uint64_t *starts,
 	uint8_t **workload, uint64_t l, uint64_t n) {
 
     CUDA_BLAKE2B_CTX ctx;
@@ -227,8 +227,8 @@ void merkle_pre_sha256(uint8_t *out, uint64_t blockSize, uint64_t *start,
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_tree_blake2b(unsigned char *output, unsigned char *input, size_t n) {
-	__shared__ unsigned char shMem[512 * OUTBYTES];
+void merkle_tree_blake2b(uint8_t *out, uint8_t *in, size_t n) {
+	__shared__ uint8_t shMem[512 * OUTBYTES];
     CUDA_BLAKE2B_CTX ctx;
 	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }
