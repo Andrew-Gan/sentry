@@ -174,8 +174,8 @@ void seq_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 }
 
 extern "C" __global__
-void merkle_pre_sha256(uint8_t *out, uint64_t blockSize, uint64_t *starts,
-	uint8_t **workload, uint64_t l, uint64_t n) {
+void merkle_pre_sha256(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
+	uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t n) {
 
 	CUDA_SHA256_CTX ctx;
 	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);

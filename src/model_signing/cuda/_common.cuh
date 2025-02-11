@@ -15,15 +15,16 @@
 
 #define merkle_pre(init, update, final) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
-	uint64_t workId = 0; \
-	while (workId < l && idx >= starts[workId]) { \
-		workId++; \
-	} \
-	workId--; \
-	uint8_t *my_in = workload[workId]; \
 	if (idx < n) { \
         init(&ctx); \
-        update(&ctx, my_in, blockSize); \
+		uint64_t workId = 0; \
+		while (workId < l && idx >= startThread[workId]) { \
+			workId++; \
+		} \
+		workId--; \
+		uint8_t *my_in = workAddr[workId] + blockSize * (idx - startThread[workId]); \
+		uint8_t *workEnd = workAddr[workId] + workSize[workId]; \
+		update(&ctx, my_in, blockSize < workEnd - my_in ? blockSize : workEnd - my_in); \
     } \
 	__syncthreads(); \
 	if (idx < n) \
