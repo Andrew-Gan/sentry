@@ -211,23 +211,19 @@ __device__ void cuda_blake2b_final(CUDA_BLAKE2B_CTX *ctx, unsigned char* out)
 }
 
 extern "C" __global__
-void seq_blake2b(unsigned char *output, unsigned char *input, size_t blockSize, size_t n) {
+void seq_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
     CUDA_BLAKE2B_CTX ctx;
 	sequential(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }
 
-// first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_pre_sha256(uint8_t *out, uint64_t blockSize, uint64_t *start,
-	uint8_t **workload, uint64_t l, uint64_t n) {
-
+void merkle_pre_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
     CUDA_BLAKE2B_CTX ctx;
     merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }
 
-// // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_tree_blake2b(unsigned char *output, unsigned char *input, size_t n) {
+void merkle_tree_blake2b(uint8_t *out, uint8_t *in, size_t n) {
 	__shared__ unsigned char shMem[512 * OUTBYTES];
     CUDA_BLAKE2B_CTX ctx;
 	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
