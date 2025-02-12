@@ -43,9 +43,8 @@
 		if (glbIdx < n && locIdx < block) \
             final(&ctx, &shMem[locIdx*OUTBYTES]); \
 	} \
-    if (locIdx == 0) { \
+    if (locIdx == 0) \
         memcpy(&out[blockIdx.x*(blockDim.x*2)*OUTBYTES], shMem, OUTBYTES); \
-    } \
 } \
 
 #endif

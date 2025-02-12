@@ -224,7 +224,7 @@ void merkle_pre_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t 
 
 extern "C" __global__
 void merkle_tree_blake2b(uint8_t *out, uint8_t *in, size_t n) {
-	__shared__ unsigned char shMem[512 * OUTBYTES];
+	extern __shared__ unsigned char shMem[];
     CUDA_BLAKE2B_CTX ctx;
 	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }

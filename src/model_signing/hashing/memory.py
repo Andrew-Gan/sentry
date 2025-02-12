@@ -195,21 +195,26 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
+        self.digest = bytes(self.digestSize)
         digests = checkCudaErrors(runtime.cudaMalloc(len(data)*self.digestSize))
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
+
+        bufferIns = []
+        bufferOuts = []
+        streams = []
 
         for i, v in enumerate(data.values()):
             size_bytes = v.numel() * v.element_size()
             nThread = (size_bytes + (blockSize-1)) // blockSize
-            stream = checkCudaErrors(runtime.cudaStreamCreate())
+            streams.append(checkCudaErrors(runtime.cudaStreamCreate()))
             
-            bufferIn = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
-            bufferOut = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
+            bufferIns.append(checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize)))
+            bufferOuts.append(checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize)))
 
             nThreadA = np.array([nThread], dtype=np.uint64)
             stateDictA = np.array([v.data_ptr()], dtype=np.uint64)
-            bufferInA = np.array([bufferIn], dtype=np.uint64)
-            bufferOutA = np.array([bufferOut], dtype=np.uint64)
+            bufferInA = np.array([bufferIns[i]], dtype=np.uint64)
+            bufferOutA = np.array([bufferOuts[i]], dtype=np.uint64)
             blockSizeA = np.array([blockSize], dtype=np.uint64)
 
             args = [bufferInA, stateDictA, blockSizeA, nThreadA]
@@ -218,7 +223,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
             grid = (nThread + (block-1)) // block
 
             checkCudaErrors(driver.cuLaunchKernel(
-                self.pre, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
+                self.pre, grid, 1, 1, block, 1, 1, 0, streams[i], args.ctypes.data, 0,
             ))
             nThread //= 2
 
@@ -231,22 +236,30 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
                 checkCudaErrors(driver.cuLaunchKernel(
                     self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
-                    stream, args.ctypes.data, 0,
+                    streams[i], args.ctypes.data, 0,
                 ))
-                checkCudaErrors(runtime.cudaMemcpy2DAsync(bufferIn, self.digestSize, bufferOut,
-                    2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
+                checkCudaErrors(runtime.cudaMemcpy2DAsync(bufferIns[i], self.digestSize, bufferOuts[i],
+                    2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, streams[i]))
                 nThread //= 2 * block
+                checkCudaErrors(runtime.cudaDeviceSynchronize())
 
-            checkCudaErrors(runtime.cudaMemcpyAsync(digests + i * self.digestSize, bufferIn, self.digestSize,
-                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
-            checkCudaErrors(runtime.cudaFreeAsync(bufferIn, stream))
-            checkCudaErrors(runtime.cudaFreeAsync(bufferOut, stream))
+            checkCudaErrors(runtime.cudaMemcpyAsync(digests + i * self.digestSize, bufferIns[i], self.digestSize,
+                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, streams[i]))
+        
+        for i, o, s in zip(bufferIns, bufferOuts, streams):
+            checkCudaErrors(runtime.cudaStreamSynchronize(s))
+            checkCudaErrors(runtime.cudaFree(i))
+            checkCudaErrors(runtime.cudaFree(o))
+            checkCudaErrors(runtime.cudaStreamDestroy(s))
+
+        nThread = (len(data) + 1) // 2
+        stream = checkCudaErrors(runtime.cudaStreamCreate())
+        output = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
+        inputA = np.array([digests], dtype=np.uint64)
+        outputA = np.array([output], dtype=np.uint64)
 
         while nThread > 0:
             nThreadA = np.array([nThread], dtype=np.uint64)
-            inputA = np.array([digests], dtype=np.uint64)
-            output = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
-            outputA = np.array([bufferOut], dtype=np.uint64)
             args = [outputA, inputA, nThreadA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             block = min(512, nThread)
@@ -259,11 +272,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
             checkCudaErrors(runtime.cudaMemcpy2DAsync(digests, self.digestSize, output,
                 2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             nThread //= 2 * block
-        
-        self.digest = bytes(self.digestSize)
 
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
         checkCudaErrors(runtime.cudaMemcpy(self.digest, digests, self.digestSize,
             runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+        checkCudaErrors(runtime.cudaFree(digests))
+        checkCudaErrors(runtime.cudaDeviceSynchronize())
 
     @override
     def reset(self, data: bytes = b"") -> None:
