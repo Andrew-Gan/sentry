@@ -16,12 +16,12 @@
 #define merkle_pre(init, update, final) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
 	uint8_t *my_in = in + idx * blockSize; \
-	if (idx < n) { \
+	if (idx < nThread) { \
         init(&ctx); \
-        update(&ctx, my_in, blockSize); \
+        update(&ctx, my_in, my_in + blockSize < in + sBytes ? blockSize : in + sBytes - my_in); \
     } \
 	__syncthreads(); \
-	if (idx < n) \
+	if (idx < nThread) \
         final(&ctx, &out[idx * OUTBYTES]); \
 } \
 

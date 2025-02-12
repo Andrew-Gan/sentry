@@ -217,7 +217,7 @@ void seq_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 }
 
 extern "C" __global__
-void merkle_pre_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
+void merkle_pre_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nThread, uint64_t sBytes) {
     CUDA_BLAKE2B_CTX ctx;
     merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }

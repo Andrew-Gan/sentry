@@ -312,7 +312,7 @@ void seq_keccak(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 }
 
 extern "C" __global__
-void merkle_pre_keccak(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
+void merkle_pre_keccak(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nThread, uint64_t sBytes) {
   	CUDA_KECCAK_CTX ctx;
     merkle_pre(cuda_keccak_init, cuda_keccak_update, cuda_keccak_final);
 }
