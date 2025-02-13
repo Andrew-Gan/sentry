@@ -166,6 +166,8 @@ class SeqGPU(hashing.StreamingHashEngine):
 
         checkCudaErrors(runtime.cudaMemcpy(self.digest, oData, self.digestSize,
             runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        print(f'Peak memory consumption: {(total-free) // 1000000} / {total // 1000000}')
         checkCudaErrors(runtime.cudaFree(iData))
         checkCudaErrors(runtime.cudaFree(oData))
     
@@ -197,6 +199,8 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
+        prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
+
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         stream = checkCudaErrors(runtime.cudaStreamCreate())
@@ -255,6 +259,10 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
         checkCudaErrors(runtime.cudaMemcpy(self.digest, bufferI, self.digestSize,
             runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+
+        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
+
         checkCudaErrors(runtime.cudaFree(bufferI))
         checkCudaErrors(runtime.cudaFree(bufferO))
 
