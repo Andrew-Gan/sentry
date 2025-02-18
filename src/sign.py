@@ -273,7 +273,7 @@ def compile(algo):
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
     opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda']
 
-    with open('model_signing/cuda/%s.cu' % algo, 'r') as f:
+    with open('model_signing/cuda/%s.cuh' % algo, 'r') as f:
         code = f.read()
     # parse cuda code from file
     prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cu', 'utf-8'), 0, [], []))
@@ -319,7 +319,7 @@ if __name__ == "__main__":
         t1 = time.monotonic()
         print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for algo in ['sha256', 'blake2b', 'keccak']:
+        for algo in ['sha256', 'blake2b', 'sha3']:
             print(f'Compiling {algo}')
             seq, pre, tree, ctx = compile(algo)
 
