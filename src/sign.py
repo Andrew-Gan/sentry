@@ -335,4 +335,8 @@ if __name__ == "__main__":
             print(f'MerkleGPU-{algo}')
             sign_model(net, memory.MerkleGPU(pre, tree, ctx, 32))
         
+        print(f'LtHashGPU')
+        _, pre, tree, ctx = compile('ltHash')
+        sign_model(net, memory.LtHashGPU(pre, tree, ctx))
+        
         del net

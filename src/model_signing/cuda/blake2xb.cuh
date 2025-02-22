@@ -52,8 +52,6 @@ typedef struct {
     BLAKE2B_CTX blake2b_ctx;
 } BLAKE2XB_CTX;
 
-bool outputLengthKnown;
-
 __device__
 void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
     auto p = reinterpret_cast<const uint64_t*>(ctx);
@@ -63,10 +61,8 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
     uint64_t s = (BLAKE2B_STATE_SIZE - BLAKE2XB_STATE_SIZE) * sizeof(*ctx->blake2b_ctx.state);
     memset(ctx->blake2b_ctx.state + BLAKE2XB_STATE_SIZE, 0, s);
     if (key) {
-        if (key_nBytes < BLAKE2B_KEYBYTES_MIN ||
-            key_nBytes > BLAKE2B_KEYBYTES_MAX) {
-            throw std::runtime_error("invalid key size");
-        }
+        assert (key_nBytes < BLAKE2B_KEYBYTES_MIN ||
+            key_nBytes > BLAKE2B_KEYBYTES_MAX);
         uint8_t block[128];
         memcpy(block, key, key_nBytes);
         memset(block + key_nBytes, 0, 128 - key_nBytes);
@@ -78,36 +74,19 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
 __device__
 void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint64_t outputLength,
     uint8_t *key = nullptr, uint64_t key_nBytes = 0,
-    uint8_t *salt = nullptr, uint64_t salt_nBytes = 0,
-    uint8_t *personalization = nullptr, uint64_t personalization_nBytes = 0) {
+    uint8_t *salt = nullptr, uint8_t *personalization = nullptr) {
 
-    if (outputLength == kUnknownOutputLength) {
-        outputLengthKnown = false;
-        outputLength = kUnknownOutputLengthMagic;
-    } else if (outputLength > kMaxOutputLength) {
-        throw std::runtime_error("Output length too large");
-    } else {
-        outputLengthKnown = true;
-    }
     memset(&ctx, 0, sizeof(ctx));
+    memcpy(ctx->blake2b_ctx.key, key, key_nBytes);
     ctx->blake2b_ctx.digestlen = BLAKE2B_BYTES_MAX;
     ctx->blake2b_ctx.keylen = static_cast<uint8_t>(key_nBytes);
     ctx->fanout = 1;
     ctx->depth = 1;
     ctx->xofLength = static_cast<uint32_t>(outputLength);
-    if (salt) {
-        if (salt_nBytes != BLAKE2B_SALTBYTES) {
-        throw std::runtime_error("Invalid salt length, must be 16 bytes");
-        }
+    if (salt)
         std::memcpy(ctx->salt, salt, sizeof(ctx->salt));
-    }
-    if (personalization) {
-        if (personalization_nBytes != BLAKE2B_PERSONALBYTES) {
-        throw std::runtime_error(
-            "Invalid personalization length, must be 16 bytes");
-        }
+    if (personalization)
         std::memcpy(ctx->personal, personalization, sizeof(ctx->personal));
-    }
     initStateFromParams(ctx, key, key_nBytes);
 }
 
@@ -118,12 +97,8 @@ void cuda_blake2xb_update(BLAKE2XB_CTX *ctx, uint8_t *data, uint64_t data_nBytes
 
 __device__
 void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out, uint64_t out_nBytes) {
-    if (outputLengthKnown) {
-        auto outLength = static_cast<uint32_t>(out_nBytes);
-        if (outLength != ctx->xofLength) {
-            throw std::runtime_error("out_nBytes must equal output length");
-        }
-    }
+    auto outLength = static_cast<uint32_t>(out_nBytes);
+    assert(outLength != ctx->xofLength);
 
     uint8_t h0[BLAKE2B_BYTES_MAX];
     cuda_blake2b_final(&ctx->blake2b_ctx, h0);
@@ -137,8 +112,7 @@ void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out, uint64_t out_nBytes) {
     uint64_t remaining = out_nBytes;
     while (remaining > 0) {
         ctx->nodeOffset = static_cast<uint32_t>(pos / BLAKE2B_BYTES_MAX);
-        uint64_t len = std::min(
-            static_cast<uint64_t>(BLAKE2B_BYTES_MAX), remaining);
+        uint64_t len = BLAKE2B_BYTES_MAX < remaining ? BLAKE2B_BYTES_MAX : remaining;
         ctx->blake2b_ctx.digestlen = static_cast<uint8_t>(len);
         initStateFromParams(ctx, nullptr, 0);
         cuda_blake2b_update(&ctx->blake2b_ctx, h0, BLAKE2B_BYTES_MAX);
