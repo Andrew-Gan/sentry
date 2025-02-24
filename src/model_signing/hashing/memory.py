@@ -147,8 +147,8 @@ class SeqGPU(hashing.StreamingHashEngine):
         iData = checkCudaErrors(runtime.cudaMalloc(total_size))
         i = 0
         for v in data.values():
-            checkCudaErrors(runtime.cudaMemcpy(iData+i, v.data_ptr(),
-                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpyAsync(iData+i, v.data_ptr(),
+                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             i += v.nbytes
 
         iDataA = np.array([iData], dtype=np.uint64)
@@ -164,12 +164,14 @@ class SeqGPU(hashing.StreamingHashEngine):
             self.hash, 1, 1, 1, 1, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, oData, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, oData, self.digestSize,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
         free, total = checkCudaErrors(runtime.cudaMemGetInfo())
         print(f'Peak memory consumption: {(total-free) // 1000000} / {total // 1000000}')
-        checkCudaErrors(runtime.cudaFree(iData))
-        checkCudaErrors(runtime.cudaFree(oData))
+        checkCudaErrors(runtime.cudaFreeAsync(iData, stream))
+        checkCudaErrors(runtime.cudaFreeAsync(oData, stream))
+        checkCudaErrors(runtime.cudaStreamSynchronize(stream))
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
     
     @override
     def reset(self, data: bytes = b"") -> None:
@@ -199,7 +201,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
-        prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
+        # prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
 
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
@@ -253,18 +255,21 @@ class MerkleGPU(hashing.StreamingHashEngine):
                 self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-            checkCudaErrors(runtime.cudaMemcpy2D(bufferI, self.digestSize, bufferO,
-                2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpy2DAsync(bufferI, self.digestSize,
+                bufferO, 2*block*self.digestSize, self.digestSize, grid,
+                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             nThread //= 2 * block
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, bufferI, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
+        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, bufferI, self.digestSize,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
 
-        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
-        print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
+        # free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        # print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
 
-        checkCudaErrors(runtime.cudaFree(bufferI))
-        checkCudaErrors(runtime.cudaFree(bufferO))
+        checkCudaErrors(runtime.cudaFreeAsync(bufferI, stream))
+        checkCudaErrors(runtime.cudaFreeAsync(bufferO, stream))
+        checkCudaErrors(runtime.cudaStreamSynchronize(stream))
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
 
     @override
     def reset(self, data: bytes = b"") -> None:
