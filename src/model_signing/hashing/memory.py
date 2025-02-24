@@ -46,7 +46,6 @@ import numpy as np
 import collections
 import math
 
-
 def _cudaGetErrorEnum(error):
     if isinstance(error, driver.CUresult):
         err, name = driver.cuGetErrorName(error)
@@ -145,8 +144,8 @@ class SeqGPU(hashing.StreamingHashEngine):
         iData = checkCudaErrors(runtime.cudaMalloc(total_size))
         i = 0
         for v in data.values():
-            checkCudaErrors(runtime.cudaMemcpy(iData+i, v.data_ptr(),
-                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpyAsync(iData+i, v.data_ptr(),
+                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             i += v.nbytes
 
         iDataA = np.array([iData], dtype=np.uint64)
@@ -162,12 +161,13 @@ class SeqGPU(hashing.StreamingHashEngine):
             self.hash, 1, 1, 1, 1, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, oData, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
-        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
-        print(f'Peak memory consumption: {(total-free) // 1000000} / {total // 1000000}')
-        checkCudaErrors(runtime.cudaFree(iData))
-        checkCudaErrors(runtime.cudaFree(oData))
+        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, oData, self.digestSize,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
+        # free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        # print(f'Peak memory consumption: {(total-free) // 1000000} / {total // 1000000}')
+        checkCudaErrors(runtime.cudaFreeAsync(iData, stream))
+        checkCudaErrors(runtime.cudaFreeAsync(oData, stream))
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
     
     @override
     def reset(self, data: bytes = b"") -> None:
@@ -197,7 +197,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
-        prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
+        # prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
 
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
@@ -205,12 +205,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
         nThread = (total_size + (blockSize-1)) // blockSize
         nThread = 2**math.ceil(math.log2(nThread))
 
-        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         stream = checkCudaErrors(runtime.cudaStreamCreate())
+        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         i = 0
         for v in data.values():
-            checkCudaErrors(runtime.cudaMemcpy(content+i, v.data_ptr(),
-                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpyAsync(content+i, v.data_ptr(),
+                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             i += v.nbytes
 
         buffer = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
@@ -225,8 +225,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         grid = (nThread + (block-1)) // block
 
         checkCudaErrors(driver.cuLaunchKernel(
-            self.pre, grid, 1, 1, block, 1, 1,
-            0, stream, args.ctypes.data, 0,
+            self.pre, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
         nThread //= 2
 
@@ -241,16 +240,19 @@ class MerkleGPU(hashing.StreamingHashEngine):
                 self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-            checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
-                2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpy2DAsync(buffer, self.digestSize,
+                content, 2*block*self.digestSize, self.digestSize, grid,
+                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             nThread //= 2 * block
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, buffer, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
-        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
-        print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
-        checkCudaErrors(runtime.cudaFree(content))
-        checkCudaErrors(runtime.cudaFree(buffer))
+        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, buffer, self.digestSize,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
+        # free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        # print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
+        checkCudaErrors(runtime.cudaFreeAsync(content, stream))
+        checkCudaErrors(runtime.cudaFreeAsync(buffer, stream))
+        checkCudaErrors(runtime.cudaStreamSynchronize(stream))
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
 
     @override
     def reset(self, data: bytes = b"") -> None:
@@ -270,44 +272,44 @@ class MerkleGPU(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self.digestSize
 
-class LtHashGPU(hashing.StreamingHashEngine):
+class LatticeGPU(hashing.StreamingHashEngine):
     def __init__(self, pre, hash, ctx):
         self.ctx = ctx
         self.pre = pre
         self.hash = hash
+        self.digestSize = 64
 
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
-        prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
-
+        # prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
+    
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         total_size = sum(d.nbytes for d in data.values())
         nThread = (total_size + (blockSize-1)) // blockSize
         nThread = 2**math.ceil(math.log2(nThread))
 
-        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         stream = checkCudaErrors(runtime.cudaStreamCreate())
+        content = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
         i = 0
         for v in data.values():
-            checkCudaErrors(runtime.cudaMemcpy(content+i, v.data_ptr(),
-                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpyAsync(content+i, v.data_ptr(),
+                v.nbytes, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             i += v.nbytes
 
         buffer = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
         contentA = np.array([content], dtype=np.uint64)
-        nThreadA = np.array([nThread], dtype=np.uint64)
         bufferA = np.array([buffer], dtype=np.uint64)
+        nThreadA = np.array([nThread], dtype=np.uint64)
         blockSizeA = np.array([blockSize], dtype=np.uint64)
 
         args = [bufferA, contentA, blockSizeA, nThreadA]
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-        block = min(512 // (self.digestSize // 32), nThread)
+        block = min(512, nThread)
         grid = (nThread + (block-1)) // block
 
         checkCudaErrors(driver.cuLaunchKernel(
-            self.pre, grid, 1, 1, block, 1, 1,
-            0, stream, args.ctypes.data, 0,
+            self.pre, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
         nThread //= 2
 
@@ -322,16 +324,19 @@ class LtHashGPU(hashing.StreamingHashEngine):
                 self.hash, grid, 1, 1, block, 1, 1, block * self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-            checkCudaErrors(runtime.cudaMemcpy2D(buffer, self.digestSize, content,
-                2*block*self.digestSize, self.digestSize, grid, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
+            checkCudaErrors(runtime.cudaMemcpy2DAsync(buffer, self.digestSize,
+                content, 2*block*self.digestSize, self.digestSize, grid,
+                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             nThread //= 2 * block
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, buffer, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
-        free, total = checkCudaErrors(runtime.cudaMemGetInfo())
-        print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
-        checkCudaErrors(runtime.cudaFree(content))
-        checkCudaErrors(runtime.cudaFree(buffer))
+        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, buffer, self.digestSize,
+            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
+        # free, total = checkCudaErrors(runtime.cudaMemGetInfo())
+        # print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
+        checkCudaErrors(runtime.cudaFreeAsync(content, stream))
+        checkCudaErrors(runtime.cudaFreeAsync(buffer, stream))
+        checkCudaErrors(runtime.cudaStreamSynchronize(stream))
+        checkCudaErrors(runtime.cudaStreamDestroy(stream))
 
     @override
     def reset(self, data: bytes = b"") -> None:
