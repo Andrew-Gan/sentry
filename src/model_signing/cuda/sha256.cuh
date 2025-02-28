@@ -174,14 +174,14 @@ void seq_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 }
 
 extern "C" __global__
-void merkle_pre_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
+void merkle_hash_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 	SHA256_CTX ctx;
-	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
+	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32);
 }
 
 extern "C" __global__
-void merkle_tree_sha256(uint8_t *out, uint8_t *in, size_t n) {
+void merkle_reduce_sha256(uint8_t *out, uint8_t *in, size_t n) {
 	extern __shared__ uint8_t shMem[];
 	SHA256_CTX ctx;
-	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
+	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32);
 }

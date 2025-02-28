@@ -20,8 +20,7 @@
 #include "blake2xb.cuh"
 
 __device__
-void add(uint64_t bitsPerElem, const uint64_t b1, const uint64_t b2,
-    uint64_t *out) {
+void add(const uint64_t b1, const uint64_t b2, uint64_t *out) {
 
     // When bitsPerElem is 16:
     // There are no padding bits, 4x 16-bit values fit exactly into a uint64_t:
@@ -35,7 +34,7 @@ void add(uint64_t bitsPerElem, const uint64_t b1, const uint64_t b2,
     // When bitsPerElem is 32:
     // There are no padding bits, 2x 32-bit values fit exactly into a uint64_t.
     // We independently add the high and low halves and then XOR them together.
-    const uint64_t kMaskA = bitsPerElem == 16 ? 0xffff0000ffff0000ULL : 0xffffffff00000000ULL;
+    const uint64_t kMaskA = 0xffff0000ffff0000ULL;
     const uint64_t kMaskB = ~kMaskA;
 
     uint64_t v1a = b1 & kMaskA;
@@ -48,10 +47,9 @@ void add(uint64_t bitsPerElem, const uint64_t b1, const uint64_t b2,
 }
 
 __device__
-void sub(uint64_t bitsPerElem, const uint64_t b1, const uint64_t b2,
-    uint64_t *out) {
+void sub(const uint64_t b1, const uint64_t b2, uint64_t *out) {
 
-    const uint64_t kMaskA = bitsPerElem == 16 ? 0xffff0000ffff0000ULL : 0xffffffff00000000ULL;
+    const uint64_t kMaskA = 0xffff0000ffff0000ULL;
     const uint64_t kMaskB = ~kMaskA;
 
     uint64_t v1a = b1 & kMaskA;
@@ -70,7 +68,7 @@ size_t getChecksumSizeBytes(uint64_t N, uint64_t B) {
 }
 
 extern "C" __global__ 
-void pre_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
+void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= nThread) return;
 
@@ -82,29 +80,29 @@ void pre_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
 }
 
 __device__
-void ltHash_add_warp(uint64_t B, uint64_t *sdata, uint64_t tid) {
+void ltHash_add_warp(uint64_t *sdata, uint64_t tid) {
     for (int numThread = 32; numThread >= 8; numThread /= 2) {
         if (tid < numThread)
-            add(B, sdata[tid], sdata[tid + numThread], sdata + tid);
+            add(sdata[tid], sdata[tid + numThread], sdata + tid);
     }
 }
 
 extern "C" __global__
-void add_ltHash(uint64_t B, uint64_t *out, uint64_t *in) {
+void add_ltHash(uint64_t *out, uint64_t *in) {
     extern __shared__ uint64_t sdata[];
     uint64_t tid = threadIdx.x;
     uint64_t digestId = (2 * blockDim.x) * blockIdx.x + tid;
     uint64_t *lhs = in + digestId;
     uint64_t *rhs = in + digestId + blockDim.x;
-    add(B, *lhs, *rhs, sdata+tid);
+    add(*lhs, *rhs, sdata+tid);
 
     for (uint64_t numThread = blockDim.x / 2; numThread > 32; numThread /= 2) {
         if (tid < numThread) {
-            add(B, sdata[tid], sdata[tid + numThread], sdata + tid);
+            add(sdata[tid], sdata[tid + numThread], sdata + tid);
         }
         __syncthreads();
     }
-    ltHash_add_warp(B, sdata, tid);
+    ltHash_add_warp(sdata, tid);
     uint64_t U64PerHash = BLAKE2B_BYTES_MAX / sizeof(*out);
     if (tid < U64PerHash) {
         uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;

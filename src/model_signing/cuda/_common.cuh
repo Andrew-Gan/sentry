@@ -1,7 +1,6 @@
 #ifndef __COMMON_CUH__
 #define __COMMON_CUH__
 
-#define OUTBYTES 64
 #define uint8_t unsigned char
 #define uint32_t unsigned int
 #define uint64_t unsigned long
@@ -14,37 +13,37 @@
     final(&ctx, out); \
 } \
 
-#define merkle_pre(init, update, final) { \
+#define merkle_pre(init, update, final, outBytes) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
 	if (idx < n) { \
         init(&ctx); \
         update(&ctx, in + idx * blockSize, blockSize); \
-        final(&ctx, &out[idx * OUTBYTES]); \
+        final(&ctx, &out[idx * outBytes]); \
     } \
 } \
 
-#define merkle_step(init, update, final) { \
+#define merkle_step(init, update, final, outBytes) { \
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x; \
 	int locIdx = threadIdx.x; \
     if (glbIdx < n) { \
         init(&ctx); \
-		update(&ctx, &in[(2*glbIdx)*OUTBYTES], OUTBYTES); \
-		update(&ctx, &in[(2*glbIdx+1)*OUTBYTES], OUTBYTES); \
-        final(&ctx, &shMem[locIdx*OUTBYTES]); \
+		update(&ctx, &in[(2*glbIdx)*outBytes], outBytes); \
+		update(&ctx, &in[(2*glbIdx+1)*outBytes], outBytes); \
+        final(&ctx, &shMem[locIdx*outBytes]); \
 	} \
     for (int block = blockDim.x / 2; block >= 1; block /= 2) { \
 		if (glbIdx < n && locIdx < block) { \
-			update(&ctx, &shMem[(2*locIdx)*OUTBYTES], OUTBYTES); \
-			update(&ctx, &shMem[(2*locIdx+1)*OUTBYTES], OUTBYTES); \
+			update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
+			update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
 		} \
 		__syncthreads(); \
 		if (glbIdx < n && locIdx < block) {\
-            final(&ctx, &shMem[locIdx*OUTBYTES]); \
+            final(&ctx, &shMem[locIdx*outBytes]); \
         } \
         __syncthreads(); \
 	} \
     if (locIdx == 0) { \
-        memcpy(out + blockIdx.x*OUTBYTES, shMem, OUTBYTES); \
+        memcpy(out + blockIdx.x*outBytes, shMem, outBytes); \
     } \
 } \
 
