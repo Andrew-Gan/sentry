@@ -152,8 +152,7 @@ void cuda_blake2b_update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
     unsigned int start = 0;
     long in_index = 0, block_index = 0;
 
-    if (ctx->pos)
-    {
+    if (ctx->pos) {
         start = BLAKE2B_BLOCK_LENGTH - ctx->pos;
         if (start < inlen){
             memcpy(ctx->buff + ctx->pos, in, start);
@@ -172,8 +171,7 @@ void cuda_blake2b_update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
     }
 
     block_index =  inlen - BLAKE2B_BLOCK_LENGTH;
-    for (in_index = start; in_index < block_index; in_index += BLAKE2B_BLOCK_LENGTH)
-    {
+    for (in_index = start; in_index < block_index; in_index += BLAKE2B_BLOCK_LENGTH) {
         ctx->t0 += BLAKE2B_BLOCK_LENGTH;
         if (ctx->t0 == 0)
             ctx->t1++;
@@ -219,7 +217,7 @@ void merkle_pre_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t 
 
 extern "C" __global__
 void merkle_tree_blake2b(uint8_t *out, uint8_t *in, size_t n) {
-	__shared__ unsigned char shMem[512 * OUTBYTES];
+	extern __shared__ uint8_t shMem[];
     BLAKE2B_CTX ctx;
 	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
 }

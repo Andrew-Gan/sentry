@@ -321,7 +321,7 @@ void merkle_pre_sha3(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
 void merkle_tree_sha3(uint8_t *out, uint8_t *in, uint64_t n) {
-    __shared__ uint8_t shMem[512 * OUTBYTES];
+	extern __shared__ uint8_t shMem[];
     SHA3_CTX ctx;
 	merkle_step(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final);
 }

@@ -1,7 +1,7 @@
 #ifndef __COMMON_CUH__
 #define __COMMON_CUH__
 
-#define OUTBYTES 32
+#define OUTBYTES 64
 #define uint8_t unsigned char
 #define uint32_t unsigned int
 #define uint64_t unsigned long
@@ -16,14 +16,11 @@
 
 #define merkle_pre(init, update, final) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
-	uint8_t *my_in = in + idx * blockSize; \
 	if (idx < n) { \
         init(&ctx); \
-        update(&ctx, my_in, blockSize); \
-    } \
-	__syncthreads(); \
-	if (idx < n) \
+        update(&ctx, in + idx * blockSize, blockSize); \
         final(&ctx, &out[idx * OUTBYTES]); \
+    } \
 } \
 
 #define merkle_step(init, update, final) { \
@@ -41,11 +38,13 @@
 			update(&ctx, &shMem[(2*locIdx+1)*OUTBYTES], OUTBYTES); \
 		} \
 		__syncthreads(); \
-		if (glbIdx < n && locIdx < block) \
+		if (glbIdx < n && locIdx < block) {\
             final(&ctx, &shMem[locIdx*OUTBYTES]); \
+        } \
+        __syncthreads(); \
 	} \
     if (locIdx == 0) { \
-        memcpy(&out[blockIdx.x*(blockDim.x*2)*OUTBYTES], shMem, OUTBYTES); \
+        memcpy(out + blockIdx.x*OUTBYTES, shMem, OUTBYTES); \
     } \
 } \
 
