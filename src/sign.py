@@ -293,35 +293,51 @@ def compile(algo):
 
 if __name__ == "__main__":
     PATH = './model.pth'
-    models = []
-    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'resnet152', pretrained=True))
-    models.append(torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2'))
-    models.append(torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'))
-    models.append(torch.hub.load('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
+    models = [
+        ('pytorch/vision:v0.10.0', 'resnet152'),
+        ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
+        ('pytorch/vision:v0.10.0', 'vgg19'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+    ]
 
-    for net in models:
+    for m in models:
+        if len(m) == 2:
+            net = torch.hub.load(m[0], m[1], pretrained=True)
+        elif len(m) == 3:
+            net = torch.hub.load(m[0], m[1], m[2])
+
         print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
-        # t0 = time.monotonic()
-        # torch.save(net, PATH)
-        # t1 = time.monotonic()
-        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        t0 = time.monotonic()
+        torch.save(net, PATH)
+        t1 = time.monotonic()
+        print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
-        # t0 = time.monotonic()
-        # torch.load(PATH, weights_only=False)
-        # t1 = time.monotonic()
-        # print(f'Read from file: {1000*(t1-t0):.2f} ms')
+        t0 = time.monotonic()
+        torch.load(PATH, weights_only=False)
+        t1 = time.monotonic()
+        print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for algo in ['sha256', 'blake2b', 'keccak']:
+        for algo in ['sha256', 'blake2b', 'sha3']:
+        for algo in ['blake2b']:
             print(f'Compiling {algo}')
-            seq, pre, tree, ctx = compile(algo)
+            ctx, [seq, pre, tree] = compile(algo, ['seq_', 'merkle_pre_', 'merkle_tree_'])
 
-            # print('Hashing from file using SHA256')
-            # sign_files(PATH, memory.SHA256())
+            print(f'CPU Hashing from file using {algo}')
+            if algo == 'sha256':
+                sign_files(PATH, memory.SHA256())
+            elif algo == 'blake2b':
+                sign_files(PATH, memory.BLAKE2())
 
-            # print(f'SeqGPU-{algo}')
-            # sign_model(net, memory.SeqGPU(seq, ctx, 32))
+            print(f'SeqGPU-{algo}')
+            sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
             print(f'MerkleGPU-{algo}')
-            sign_model(net, memory.MerkleGPU(pre, tree, ctx, 32))
+            sign_model(net, memory.MerkleGPU(pre, tree, ctx))
+        
+        print(f'LatticeGPU')
+        ctx, [pre, tree] = compile('ltHash', ['pre_', 'add_'])
+        sign_model(net, memory.LatticeGPU(pre, tree, ctx))
+        
+        del net
