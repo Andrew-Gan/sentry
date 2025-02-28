@@ -15,10 +15,11 @@
 
 #define merkle_pre(init, update, final, outBytes) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
-    uint64_t myIn = in + idx * blockSize; \
+    uint8_t *myIn = in + idx * blockSize; \
+	uint8_t *myEnd = myIn + blockSize; \
 	if (myIn < in + size) { \
         init(&ctx); \
-        update(&ctx, in + idx * blockSize, blockSize); \
+        update(&ctx, myIn, blockSize < myEnd - myIn ? blockSize : myEnd - myIn); \
         final(&ctx, &out[idx * outBytes]); \
     } \
 } \

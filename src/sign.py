@@ -38,8 +38,6 @@ import time
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 
-import torchvision.transforms.v2
-
 log = logging.getLogger(__name__)
 SAMPLE_SIZE = 8
 
@@ -206,7 +204,6 @@ def sign_files(path, hasher, chunk=8192):
     path = pathlib.Path(path)
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
-
     payload_signer = _get_payload_signer(args)
 
     def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
@@ -263,7 +260,7 @@ def sign_model(net, hasher):
     sig.write(args.sig_out)
 
 
-def compile(algo):
+def compile(algo, prefixes):
     driver.cuInit(0)
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
@@ -271,25 +268,32 @@ def compile(algo):
     major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
     minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda']
+    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda', b'-I/usr/lib/gcc/x86_64-linux-gnu/11/include/stddef.h']
 
-    with open('model_signing/cuda/%s.cu' % algo, 'r') as f:
+    with open('model_signing/cuda/%s.cuh' % algo, 'r') as f:
         code = f.read()
     # parse cuda code from file
-    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cu', 'utf-8'), 0, [], []))
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cuh', 'utf-8'), 0, [], []))
+    
     # compile code into program and extract ptx
-    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
+    if err[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
+        logSize = checkCudaErrors(nvrtc.nvrtcGetProgramLogSize(prog))
+        log = bytes(logSize)
+        checkCudaErrors(nvrtc.nvrtcGetProgramLog(prog, log))
+        print(log.decode("utf-8"))
+        checkCudaErrors(err)
+
     ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
     ptx = b' ' * ptxSize
     checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
     ptx = np.char.array(ptx)
     # obtain global functions as entrypoints into gpu
     module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
-    seqHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'seq_{algo}', 'utf-8')))
-    preHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_pre_{algo}', 'utf-8')))
-    treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_tree_{algo}', 'utf-8')))
-    return seqHash, preHash, treeHash, ctx
-
+    funcs = []
+    for p in prefixes:
+        funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'{p}{algo}', 'utf-8'))))
+    return ctx, funcs
 
 if __name__ == "__main__":
     PATH = './model.pth'
@@ -309,29 +313,29 @@ if __name__ == "__main__":
             net = torch.hub.load(m[0], m[1], m[2])
 
         print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
-        t0 = time.monotonic()
-        torch.save(net, PATH)
-        t1 = time.monotonic()
-        print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.save(net, PATH)
+        # t1 = time.monotonic()
+        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
-        t0 = time.monotonic()
-        torch.load(PATH, weights_only=False)
-        t1 = time.monotonic()
-        print(f'Read from file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.load(PATH, weights_only=False)
+        # t1 = time.monotonic()
+        # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for (algo, size) in [('sha256', 32), ('blake2b', 64), ('sha3', 64)]:
             ctx, [seq, hashblock, reduce] = compile(algo, ['seq_', 'merkle_hash_', 'merkle_reduce_'])
 
-            print(f'CPU Hashing from file using {algo}')
-            if algo == 'sha256':
-                sign_files(PATH, memory.SHA256())
-            elif algo == 'blake2b':
-                sign_files(PATH, memory.BLAKE2())
+            # print(f'CPU Hashing from file using {algo}')
+            # if algo == 'sha256':
+            #     sign_files(PATH, memory.SHA256())
+            # elif algo == 'blake2b':
+            #     sign_files(PATH, memory.BLAKE2())
 
-            print(f'SeqGPU-{algo}')
-            sign_model(net, memory.SeqGPU(seq, ctx, 32))
+            # print(f'SeqGPU-{algo}')
+            # sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
-            print(f'HashAndReduceGPU-{algo}')
+            print(f'MerkleGPU-{algo}')
             sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 1))
         
         print(f'LatticeGPU-blake2xb')
