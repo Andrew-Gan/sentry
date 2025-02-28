@@ -319,10 +319,8 @@ if __name__ == "__main__":
         t1 = time.monotonic()
         print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for algo in ['sha256', 'blake2b', 'sha3']:
-        for algo in ['blake2b']:
-            print(f'Compiling {algo}')
-            ctx, [seq, pre, tree] = compile(algo, ['seq_', 'merkle_pre_', 'merkle_tree_'])
+        for (algo, size) in [('sha256', 32), ('blake2b', 64), ('sha3', 64)]:
+            ctx, [seq, hashblock, reduce] = compile(algo, ['seq_', 'merkle_hash_', 'merkle_reduce_'])
 
             print(f'CPU Hashing from file using {algo}')
             if algo == 'sha256':
@@ -333,11 +331,11 @@ if __name__ == "__main__":
             print(f'SeqGPU-{algo}')
             sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
-            print(f'MerkleGPU-{algo}')
-            sign_model(net, memory.MerkleGPU(pre, tree, ctx))
+            print(f'HashAndReduceGPU-{algo}')
+            sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 1))
         
-        print(f'LatticeGPU')
-        ctx, [pre, tree] = compile('ltHash', ['pre_', 'add_'])
-        sign_model(net, memory.LatticeGPU(pre, tree, ctx))
+        print(f'LatticeGPU-blake2xb')
+        ctx, [hashblock, reduce] = compile('ltHash', ['hash_', 'add_'])
+        sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 8))
         
         del net
