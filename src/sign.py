@@ -38,10 +38,8 @@ import time
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 
-import torchvision.transforms.v2
-
 log = logging.getLogger(__name__)
-SAMPLE_SIZE = 1
+SAMPLE_SIZE = 8
 
 
 def _cudaGetErrorEnum(error):
@@ -206,7 +204,6 @@ def sign_files(path, hasher, chunk=8192):
     path = pathlib.Path(path)
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
-
     payload_signer = _get_payload_signer(args)
 
     def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
@@ -232,6 +229,38 @@ def sign_files(path, hasher, chunk=8192):
     sig.write(args.sig_out)
 
 
+def sign_data(dataset, hasher):
+    # dataset already on GPU
+    logging.basicConfig(level=logging.INFO)
+    args = _arguments()
+
+    payload_signer = _get_payload_signer(args)
+
+    def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
+        return state.SimpleStateHasher(
+            state=state_dict, content_hasher=hasher
+        )
+
+    serializer = serialize_by_state.ManifestSerializer(
+        state_hasher_factory=hasher_factory
+    )
+
+    checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+    t0 = time.monotonic()
+    for _ in range(SAMPLE_SIZE):
+        sig = model.sign_state(
+            states=states,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+        )
+        checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+        print(f'Digest: {hasher.digest[:8].hex()}')
+    t1 = time.monotonic()
+    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
+    sig.write(args.sig_out)
+
+
 def sign_model(net, hasher):
     net = net.to('cuda')
     logging.basicConfig(level=logging.INFO)
@@ -250,6 +279,8 @@ def sign_model(net, hasher):
 
     states = {'state_dict': net.state_dict(),}
 
+    digests = []
+
     t0 = time.monotonic()
     for _ in range(SAMPLE_SIZE):
         sig = model.sign_state(
@@ -258,12 +289,18 @@ def sign_model(net, hasher):
             payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
             serializer=serializer,
         )
+        digests.append(hasher.digest)
     t1 = time.monotonic()
+
+    if len(set(digests)) == 1:
+        print(f'Digest: {digests[0][:8].hex()}')
+    else:
+        raise RuntimeError('Digests inconsistent')
     print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
 
 
-def compile(algo):
+def compile(algo, prefixes):
     driver.cuInit(0)
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
@@ -271,35 +308,42 @@ def compile(algo):
     major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
     minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda']
+    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda', b'-I/usr/lib/gcc/x86_64-linux-gnu/11/include/stddef.h']
 
-    with open('model_signing/cuda/%s.cu' % algo, 'r') as f:
+    with open('model_signing/cuda/%s.cuh' % algo, 'r') as f:
         code = f.read()
     # parse cuda code from file
-    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cu', 'utf-8'), 0, [], []))
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cuh', 'utf-8'), 0, [], []))
+    
     # compile code into program and extract ptx
-    checkCudaErrors(nvrtc.nvrtcCompileProgram(prog, len(opts), opts))
+    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
+    if err[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
+        logSize = checkCudaErrors(nvrtc.nvrtcGetProgramLogSize(prog))
+        log = bytes(logSize)
+        checkCudaErrors(nvrtc.nvrtcGetProgramLog(prog, log))
+        print(log.decode("utf-8"))
+        checkCudaErrors(err)
+
     ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
     ptx = b' ' * ptxSize
     checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
     ptx = np.char.array(ptx)
     # obtain global functions as entrypoints into gpu
     module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
-    seqHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'seq_{algo}', 'utf-8')))
-    preHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_pre_{algo}', 'utf-8')))
-    treeHash = checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'merkle_tree_{algo}', 'utf-8')))
-    return seqHash, preHash, treeHash, ctx
-
+    funcs = []
+    for p in prefixes:
+        funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'{p}{algo}', 'utf-8'))))
+    return ctx, funcs
 
 if __name__ == "__main__":
     PATH = './model.pth'
     models = [
         ('pytorch/vision:v0.10.0', 'resnet152'),
-        ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-        ('pytorch/vision:v0.10.0', 'vgg19'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+        # ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
+        # ('pytorch/vision:v0.10.0', 'vgg19'),
+        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
+        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
     ]
 
     for m in models:
@@ -319,20 +363,22 @@ if __name__ == "__main__":
         # t1 = time.monotonic()
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for algo in ['sha256', 'blake2b', 'keccak']:
-
+        for (algo, size) in [('sha256', 32), ('blake2b', 64), ('sha3', 64)]:
             # print(f'CPU Hashing from file using {algo}')
             # if algo == 'sha256':
             #     sign_files(PATH, memory.SHA256())
             # elif algo == 'blake2b':
             #     sign_files(PATH, memory.BLAKE2())
 
+            ctx, [seq, hashblock, reduce] = compile(algo, ['seq_', 'merkle_hash_', 'merkle_reduce_'])
             # print(f'SeqGPU-{algo}')
             # sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
-            print(f'Compiling {algo}')
-            seq, pre, tree, ctx = compile(algo)
             print(f'MerkleGPU-{algo}')
-            sign_model(net, memory.MerkleGPU(pre, tree, ctx, 32))
+            sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 1))
+        
+        # print(f'LatticeGPU-blake2xb')
+        # ctx, [hashblock, reduce] = compile('ltHash', ['hash_', 'add_'])
+        # sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, 64, 8))
         
         del net
