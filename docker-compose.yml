@@ -1,9 +1,9 @@
 services:
-  cusign:
+  sentry:
     build:
-      dockerfile: dockerfile
-    image: cusign:latest
-    container_name: cusign
+      dockerfile: sentry.dockerfile
+    image: sentry:latest
+    container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
     deploy:

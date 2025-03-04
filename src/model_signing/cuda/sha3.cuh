@@ -313,14 +313,14 @@ void seq_sha3(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 
 // first mapping of blocks to digests at the leaves layer
 extern "C" __global__
-void merkle_hash_sha3(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
+void hash_sha3(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
     SHA3_CTX ctx;
     merkle_pre(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 64UL);
 }
 
 // // subsequent halving of merkle tree until one digest remains per threadblock
 extern "C" __global__
-void merkle_reduce_sha3(uint8_t *out, uint8_t *in, uint64_t n) {
+void reduce_sha3(uint8_t *out, uint8_t *in, uint64_t n) {
 	extern __shared__ uint8_t shMem[];
     SHA3_CTX ctx;
 	merkle_step(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 64UL);
