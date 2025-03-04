@@ -247,6 +247,7 @@ def sign_model(net, hasher):
 
     states = {'state_dict': net.state_dict(),}
 
+    checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
     t0 = time.monotonic()
     for _ in range(SAMPLE_SIZE):
         sig = model.sign_state(
@@ -255,6 +256,8 @@ def sign_model(net, hasher):
             payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
             serializer=serializer,
         )
+        checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+        print(f'Digest: {hasher.digest[:8].hex()}')
     t1 = time.monotonic()
     print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
@@ -313,33 +316,32 @@ if __name__ == "__main__":
             net = torch.hub.load(m[0], m[1], m[2])
 
         print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
-        t0 = time.monotonic()
-        torch.save(net, PATH)
-        t1 = time.monotonic()
-        print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.save(net, PATH)
+        # t1 = time.monotonic()
+        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
-        t0 = time.monotonic()
-        torch.load(PATH, weights_only=False)
-        t1 = time.monotonic()
-        print(f'Read from file: {1000*(t1-t0):.2f} ms')
+        # t0 = time.monotonic()
+        # torch.load(PATH, weights_only=False)
+        # t1 = time.monotonic()
+        # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for (algo, size) in [('sha256', 32), ('blake2b', 64), ('sha3', 64)]:
+            # print(f'CPU Hashing from file using {algo}')
+            # if algo == 'sha256':
+            #     sign_files(PATH, memory.SHA256())
+            # elif algo == 'blake2b':
+            #     sign_files(PATH, memory.BLAKE2())
+
             ctx, [seq, hashblock, reduce] = compile(algo, ['seq_', 'merkle_hash_', 'merkle_reduce_'])
-
-            print(f'CPU Hashing from file using {algo}')
-            if algo == 'sha256':
-                sign_files(PATH, memory.SHA256())
-            elif algo == 'blake2b':
-                sign_files(PATH, memory.BLAKE2())
-
-            print(f'SeqGPU-{algo}')
-            sign_model(net, memory.SeqGPU(seq, ctx, 32))
+            # print(f'SeqGPU-{algo}')
+            # sign_model(net, memory.SeqGPU(seq, ctx, 32))
 
             print(f'MerkleGPU-{algo}')
             sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 1))
         
         print(f'LatticeGPU-blake2xb')
         ctx, [hashblock, reduce] = compile('ltHash', ['hash_', 'add_'])
-        sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 8))
+        sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, 64, 8))
         
         del net

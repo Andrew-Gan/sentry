@@ -208,11 +208,10 @@ class HashAndReduceGPU(hashing.StreamingHashEngine):
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         total_size = sum(d.nbytes for d in data.values())
         nThread = (total_size + (blockSize-1)) // blockSize
-        nThread = 2**math.ceil(math.log2(nThread))
 
         stream = checkCudaErrors(runtime.cudaStreamCreate())
         iData = checkCudaErrors(runtime.cudaMalloc(nThread*blockSize))
-        oData = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
+        oData = checkCudaErrors(runtime.cudaMalloc((nThread+1)*self.digestSize))
         iData = (iData, np.array([iData], dtype=np.uint64))
         oData = (oData, np.array([oData], dtype=np.uint64))
 
@@ -233,27 +232,33 @@ class HashAndReduceGPU(hashing.StreamingHashEngine):
         checkCudaErrors(driver.cuLaunchKernel(
             self.hashblock, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
+
+        nThread = (nThread + 1) & ~0b1
         nThread *= self.reduceFactor
         nThread //= 2
 
-        while nThread > 0:
+        while grid > 1 or nThread > 1:
             iData, oData = oData, iData
             nThreadA = np.array([nThread], dtype=np.uint64)
             args = [oData[1], iData[1], nThreadA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
-
             checkCudaErrors(driver.cuLaunchKernel(
                 self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-            nThread //= 2 * block
+
+            nThread = (grid + 1) // 2 # half and round up to next integer
+            if nThread > 1:
+                nThread = (nThread + 1) & ~0b1 # if odd, get next even number
 
         checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, oData[0], self.digestSize,
             runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
+
         # free, total = checkCudaErrors(runtime.cudaMemGetInfo())
         # print(f'Peak memory consumption: {(prevfree-free) // 1000000} / {total // 1000000}')
+
         checkCudaErrors(runtime.cudaFreeAsync(iData[0], stream))
         checkCudaErrors(runtime.cudaFreeAsync(oData[0], stream))
         checkCudaErrors(runtime.cudaStreamSynchronize(stream))

@@ -25,25 +25,29 @@
 #define merkle_step(init, update, final, outBytes) { \
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x; \
 	int locIdx = threadIdx.x; \
-    if (glbIdx < n) { \
+    int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x)); \
+    memset(&shMem[locIdx*outBytes], 0, outBytes); \
+    if (locIdx < activeThreads) { \
         init(&ctx); \
 		update(&ctx, &in[(2*glbIdx)*outBytes], outBytes); \
 		update(&ctx, &in[(2*glbIdx+1)*outBytes], outBytes); \
         final(&ctx, &shMem[locIdx*outBytes]); \
 	} \
-    for (int block = blockDim.x / 2; block >= 1; block /= 2) { \
-		if (glbIdx < n && locIdx < block) { \
-			update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
-			update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
-		} \
-		__syncthreads(); \
-		if (glbIdx < n && locIdx < block) {\
-            final(&ctx, &shMem[locIdx*outBytes]); \
+    __syncthreads(); \
+    activeThreads = (activeThreads + 1) / 2; \
+    for (; activeThreads > 0; activeThreads /= 2) { \
+        if (locIdx < activeThreads) { \
+            update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
+            update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
         } \
         __syncthreads(); \
-	} \
+        if (locIdx < activeThreads) \
+            final(&ctx, &shMem[locIdx*outBytes]); \
+        __syncthreads(); \
+        if (activeThreads > 1 && activeThreads & 0b1 == 1) activeThreads++; \
+    } \
     if (locIdx == 0) { \
-        memcpy(out + blockIdx.x*outBytes, shMem, outBytes); \
+        memcpy(out + blockIdx.x*outBytes, &shMem[locIdx*outBytes], outBytes); \
     } \
 } \
 

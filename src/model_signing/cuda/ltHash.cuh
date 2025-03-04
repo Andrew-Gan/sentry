@@ -79,14 +79,6 @@ void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
-__device__
-void ltHash_add_warp(uint64_t *sdata, uint64_t tid) {
-    for (int numThread = 32; numThread >= 8; numThread /= 2) {
-        if (tid < numThread)
-            add(sdata[tid], sdata[tid + numThread], sdata + tid);
-    }
-}
-
 extern "C" __global__
 void add_ltHash(uint64_t *out, uint64_t *in) {
     extern __shared__ uint64_t sdata[];
@@ -95,28 +87,23 @@ void add_ltHash(uint64_t *out, uint64_t *in) {
     uint64_t *lhs = in + digestId;
     uint64_t *rhs = in + digestId + blockDim.x;
     add(*lhs, *rhs, sdata+tid);
+    __syncthreads();
 
     for (uint64_t numThread = blockDim.x / 2; numThread > 32; numThread /= 2) {
-        if (tid < numThread) {
+        if (tid < numThread)
             add(sdata[tid], sdata[tid + numThread], sdata + tid);
-        }
         __syncthreads();
     }
-    ltHash_add_warp(sdata, tid);
+    for (int numThread = 32; numThread >= 8; numThread /= 2) {
+        if (tid < numThread)
+            add(sdata[tid], sdata[tid + numThread], sdata + tid);
+    }
     uint64_t U64PerHash = BLAKE2B_BYTES_MAX / sizeof(*out);
     if (tid < U64PerHash) {
         uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
         *(out + blockOffsetU64 + tid) = sdata[tid];
     }
 }
-
-// __device__
-// void ltHash_sub_warp(uint64_t B, uint64_t *sdata, uint64_t tid) {
-//     for (int numThread = 32; numThread >= 8; numThread /= 2) {
-//         if (tid < numThread)
-//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
-//     }
-// }
 
 // extern "C" __global__
 // void ltHash_sub(uint64_t B, uint64_t *dataIO) {
@@ -133,7 +120,10 @@ void add_ltHash(uint64_t *out, uint64_t *in) {
 //         }
 //         __syncthreads();
 //     }
-//     if (tid < 32) ltHash_sub_warp(B, sdata, tid);
+//     for (int numThread = 32; numThread >= 8; numThread /= 2) {
+//         if (tid < numThread)
+//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
+//     }
 //     if (tid == 0) memcpy(lhs, sdata, BLAKE2B_BYTES_MAX);
 // }
 
