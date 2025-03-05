@@ -55,6 +55,31 @@ def sign_file(
     return sig
 
 
+def sign_dataset(
+    data: list[collections.OrderedDict],
+    signer: signing.Signer,
+    payload_generator: PayloadGeneratorFunc,
+    serializer: serialization.Serializer,
+) -> signing.Signature:
+    """Provides a wrapper function for the steps necessary to sign a model.
+
+    Args:
+        state: the state to be signed.
+        signer: the signer to be used.
+        payload_generator: funtion to generate the manifest.
+        serializer: the serializer to be used for the model.
+        ignore_paths: paths that should be ignored during serialization.
+          Defaults to an empty set.
+
+    Returns:
+        The model's signature.
+    """
+    manifest = serializer.serialize(states)
+    payload = payload_generator(manifest)
+    sig = signer.sign(payload)
+    return sig
+
+
 def sign_state(
     states: list[collections.OrderedDict],
     signer: signing.Signer,

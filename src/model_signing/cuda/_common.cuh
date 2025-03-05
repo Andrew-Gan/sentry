@@ -47,7 +47,7 @@
         if (activeThreads > 1 && activeThreads & 0b1 == 1) activeThreads++; \
     } \
     if (locIdx == 0) { \
-        memcpy(out + blockIdx.x*outBytes, &shMem[locIdx*outBytes], outBytes); \
+        memcpy(out + blockIdx.x*outBytes, shMem, outBytes); \
     } \
 } \
 

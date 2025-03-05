@@ -229,6 +229,38 @@ def sign_files(path, hasher, chunk=8192):
     sig.write(args.sig_out)
 
 
+def sign_data(dataset, hasher):
+    # dataset already on GPU
+    logging.basicConfig(level=logging.INFO)
+    args = _arguments()
+
+    payload_signer = _get_payload_signer(args)
+
+    def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
+        return state.SimpleStateHasher(
+            state=state_dict, content_hasher=hasher
+        )
+
+    serializer = serialize_by_state.ManifestSerializer(
+        state_hasher_factory=hasher_factory
+    )
+
+    checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+    t0 = time.monotonic()
+    for _ in range(SAMPLE_SIZE):
+        sig = model.sign_state(
+            states=states,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+        )
+        checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+        print(f'Digest: {hasher.digest[:8].hex()}')
+    t1 = time.monotonic()
+    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
+    sig.write(args.sig_out)
+
+
 def sign_model(net, hasher):
     net = net.to('cuda')
     logging.basicConfig(level=logging.INFO)
@@ -247,7 +279,8 @@ def sign_model(net, hasher):
 
     states = {'state_dict': net.state_dict(),}
 
-    checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
+    digests = []
+
     t0 = time.monotonic()
     for _ in range(SAMPLE_SIZE):
         sig = model.sign_state(
@@ -256,9 +289,13 @@ def sign_model(net, hasher):
             payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
             serializer=serializer,
         )
-        checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
-        print(f'Digest: {hasher.digest[:8].hex()}')
+        digests.append(hasher.digest)
     t1 = time.monotonic()
+
+    if len(set(digests)) == 1:
+        print('Digests consistent')
+    else:
+        raise RuntimeError('Digests inconsistent')
     print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
     sig.write(args.sig_out)
 
