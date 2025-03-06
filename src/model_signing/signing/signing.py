@@ -45,7 +45,7 @@ import abc
 import pathlib
 import sys
 
-from model_signing.manifest import manifest
+from ..manifest import manifest
 
 
 if sys.version_info >= (3, 11):

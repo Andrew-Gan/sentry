@@ -21,11 +21,11 @@ import sys
 from sigstore_protobuf_specs.dev.sigstore.bundle import v1 as bundle_pb
 from typing_extensions import override
 
-from model_signing.manifest import manifest as manifest_module
-from model_signing.signature import signing as signature_signing
-from model_signing.signature import verifying as signature_verifying
-from model_signing.signing import in_toto
-from model_signing.signing import signing
+from ..manifest import manifest as manifest_module
+from ..signature import signing as signature_signing
+from ..signature import verifying as signature_verifying
+from . import in_toto
+from . import signing
 
 
 if sys.version_info >= (3, 11):

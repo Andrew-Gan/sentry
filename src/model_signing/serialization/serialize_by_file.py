@@ -24,10 +24,10 @@ from typing import cast
 
 from typing_extensions import override
 
-from model_signing.hashing import file
-from model_signing.hashing import hashing
-from model_signing.manifest import manifest
-from model_signing.serialization import serialization
+from ..hashing import file
+from ..hashing import hashing
+from ..manifest import manifest
+from . import serialization
 
 
 def check_file_or_directory(

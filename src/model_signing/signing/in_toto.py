@@ -26,10 +26,10 @@ from typing import Any, Final
 from in_toto_attestation.v1 import statement
 from typing_extensions import override
 
-from model_signing.hashing import hashing
-from model_signing.hashing import memory
-from model_signing.manifest import manifest as manifest_module
-from model_signing.signing import signing
+from ..hashing import hashing
+from ..hashing import memory
+from ..manifest import manifest as manifest_module
+from . import signing
 
 
 if sys.version_info >= (3, 11):

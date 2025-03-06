@@ -17,20 +17,19 @@ from collections.abc import Callable, Iterable
 import pathlib
 from typing import TypeAlias
 
-from model_signing.manifest import manifest
-from model_signing.serialization import serialization
-from model_signing.signature import verifying
-from model_signing.signing import signing
+from .manifest import manifest
+from .serialization import serialization
+from .signature import verifying
+from .signing import signing
 import collections
-
 
 PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
 
 
-def sign_file(
-    model_path: pathlib.Path,
+def sign(
+    item,
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
@@ -39,7 +38,7 @@ def sign_file(
     """Provides a wrapper function for the steps necessary to sign a model.
 
     Args:
-        model_path: the model to be signed.
+        item: the input to be hashed
         signer: the signer to be used.
         payload_generator: funtion to generate the manifest.
         serializer: the serializer to be used for the model.
@@ -49,57 +48,10 @@ def sign_file(
     Returns:
         The model's signature.
     """
-    manifest = serializer.serialize(model_path, ignore_paths=ignore_paths)
-    payload = payload_generator(manifest)
-    sig = signer.sign(payload)
-    return sig
-
-
-def sign_dataset(
-    data: list[collections.OrderedDict],
-    signer: signing.Signer,
-    payload_generator: PayloadGeneratorFunc,
-    serializer: serialization.Serializer,
-) -> signing.Signature:
-    """Provides a wrapper function for the steps necessary to sign a model.
-
-    Args:
-        state: the state to be signed.
-        signer: the signer to be used.
-        payload_generator: funtion to generate the manifest.
-        serializer: the serializer to be used for the model.
-        ignore_paths: paths that should be ignored during serialization.
-          Defaults to an empty set.
-
-    Returns:
-        The model's signature.
-    """
-    manifest = serializer.serialize(states)
-    payload = payload_generator(manifest)
-    sig = signer.sign(payload)
-    return sig
-
-
-def sign_state(
-    states: list[collections.OrderedDict],
-    signer: signing.Signer,
-    payload_generator: PayloadGeneratorFunc,
-    serializer: serialization.Serializer,
-) -> signing.Signature:
-    """Provides a wrapper function for the steps necessary to sign a model.
-
-    Args:
-        state: the state to be signed.
-        signer: the signer to be used.
-        payload_generator: funtion to generate the manifest.
-        serializer: the serializer to be used for the model.
-        ignore_paths: paths that should be ignored during serialization.
-          Defaults to an empty set.
-
-    Returns:
-        The model's signature.
-    """
-    manifest = serializer.serialize(states)
+    if ignore_paths:
+        manifest = serializer.serialize(item, ignore_paths=ignore_paths)
+    else:
+        manifest = serializer.serialize(item)
     payload = payload_generator(manifest)
     sig = signer.sign(payload)
     return sig

@@ -1,9 +1,9 @@
 services:
-  cusign:
+  sentry:
     build:
-      dockerfile: cusign.dockerfile
-    image: cusign:latest
-    container_name: cusign
+      dockerfile: sentry.dockerfile
+    image: sentry:latest
+    container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
     deploy:
@@ -14,21 +14,4 @@ services:
           devices:
             - driver: nvidia
               device_ids: ['0']
-              capabilities: [gpu]
-  dali:
-    build:
-      dockerfile: dali.dockerfile
-    image: dali:latest
-    container_name: dali
-    volumes:
-      - /share/sign-ml/dataset/DALI_extra:/home/DALI_extra
-      - /share/sign-ml/torch:/home/torch
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['1']
               capabilities: [gpu]

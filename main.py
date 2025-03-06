@@ -6,7 +6,7 @@ import torch
 import os
 import time
 
-# import src.sign as sign
+from src.sign import sign, HashType, Topology, InputType
 
 # To run with different data, see documentation of nvidia.dali.fn.readers.file
 # points to https://github.com/NVIDIA/DALI_extra
@@ -31,30 +31,11 @@ def get_dali_pipeline():
     images, labels = fn.readers.file(
         file_root=images_dir, random_shuffle=True, name="Reader")
     # entrypoint into hashing lib
+    digest = sign(images, HashType.SHA256, Topology.MERKLE, InputType.DATASET)
+    print(f'{digest.hex()}')
     # decode data on the GPU
     images = fn.decoders.image_random_crop(
         images, device="mixed", output_type=types.RGB)
-    # the rest of processing happens on the GPU as well
-    images = fn.resize(images, resize_x=256, resize_y=256)
-    images = fn.crop_mirror_normalize(
-        images,
-        crop_h=224,
-        crop_w=224,
-        mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
-        std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
-        mirror=fn.random.coin_flip())
-    return images, labels
-
-@pipeline_def(num_threads=4, device_id=0)
-def get_dali_pipeline_with_hashing():
-    images, labels = fn.readers.file(
-        file_root=images_dir, random_shuffle=True, name="Reader")
-    # entrypoint into hashing lib
-    print(images)
-    # decode data on the GPU
-    images = fn.decoders.image_random_crop(
-        images, device="mixed", output_type=types.RGB)
-    print(images)
     # the rest of processing happens on the GPU as well
     images = fn.resize(images, resize_x=256, resize_y=256)
     images = fn.crop_mirror_normalize(
@@ -80,6 +61,8 @@ dali_loader = DALIGenericIterator(
 
 model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
 model = model.to('cuda')
+
+# hash model
 
 t0 = time.monotonic()
 for i, data in enumerate(dali_loader):

@@ -23,10 +23,10 @@ from sigstore_protobuf_specs.dev.sigstore.bundle import v1 as bundle_pb
 from sigstore_protobuf_specs.dev.sigstore.common import v1 as common_pb
 from sigstore_protobuf_specs.io import intoto as intoto_pb
 
-from model_signing.signature import encoding
-from model_signing.signature.signing import Signer
-from model_signing.signature.verifying import VerificationError
-from model_signing.signature.verifying import Verifier
+from . import encoding
+from .signing import Signer
+from .verifying import VerificationError
+from .verifying import Verifier
 
 
 def load_ec_private_key(

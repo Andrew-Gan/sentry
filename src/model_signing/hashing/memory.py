@@ -39,7 +39,7 @@ import hashlib
 
 from typing_extensions import override
 
-from model_signing.hashing import hashing
+from . import hashing
 
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
@@ -189,7 +189,7 @@ class SeqGPU(hashing.StreamingHashEngine):
         return self.digestSize
 
 
-class HashAndReduceGPU(hashing.StreamingHashEngine):
+class MerkleGPU(hashing.StreamingHashEngine):
     # reduce factor is 1 for normal hashing
     # for lattice hash we spawn 8 times more threads to handle reduction
     # because each 64 byte digest can be represented as 8 uint64_t for summation

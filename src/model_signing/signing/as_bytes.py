@@ -22,8 +22,8 @@ import sys
 
 from typing_extensions import override
 
-from model_signing.manifest import manifest as manifest_module
-from model_signing.signing import signing
+from ..manifest import manifest as manifest_module
+from . import signing
 
 
 if sys.version_info >= (3, 11):

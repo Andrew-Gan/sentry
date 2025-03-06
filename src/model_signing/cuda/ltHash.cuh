@@ -80,7 +80,7 @@ void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
 }
 
 extern "C" __global__
-void add_ltHash(uint64_t *out, uint64_t *in) {
+void reduce_ltHash(uint64_t *out, uint64_t *in) {
     extern __shared__ uint64_t sdata[];
     uint64_t tid = threadIdx.x;
     uint64_t digestId = (2 * blockDim.x) * blockIdx.x + tid;
