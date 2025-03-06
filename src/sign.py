@@ -20,26 +20,63 @@ import logging
 import pathlib
 import collections
 
-from model_signing import model
-from model_signing.hashing import file
-from model_signing.hashing import state
-from model_signing.hashing import memory
-from model_signing.serialization import serialize_by_file
-from model_signing.serialization import serialize_by_state
-from model_signing.signature import fake
-from model_signing.signature import key
-from model_signing.signature import pki
-from model_signing.signing import in_toto
-from model_signing.signing import in_toto_signature
-from model_signing.signing import signing
-from model_signing.signing import sigstore
+if __name__ == "__main__":
+    from model_signing import model
+    from model_signing.hashing import hashing
+    from model_signing.hashing import file
+    from model_signing.hashing import state
+    from model_signing.hashing import memory
+    from model_signing.serialization import serialize_by_file
+    from model_signing.serialization import serialize_by_state
+    from model_signing.signature import fake
+    from model_signing.signature import key
+    from model_signing.signature import pki
+    from model_signing.signing import in_toto
+    from model_signing.signing import in_toto_signature
+    from model_signing.signing import signing
+    from model_signing.signing import sigstore
+else:
+    from .model_signing import model
+    from .model_signing.hashing import hashing
+    from .model_signing.hashing import file
+    from .model_signing.hashing import state
+    from .model_signing.hashing import memory
+    from .model_signing.serialization import serialize_by_file
+    from .model_signing.serialization import serialize_by_state
+    from .model_signing.signature import fake
+    from .model_signing.signature import key
+    from .model_signing.signature import pki
+    from .model_signing.signing import in_toto
+    from .model_signing.signing import in_toto_signature
+    from .model_signing.signing import signing
+    from .model_signing.signing import sigstore
+
 import torch
 import time
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
+from enum import Enum
+import os
 
 log = logging.getLogger(__name__)
 SAMPLE_SIZE = 8
+
+
+class HashType(Enum):
+    SHA256  = ('sha256', 32)
+    BLAKE2B = ('blake2b', 64)
+    SHA3    = ('sha3', 64)
+    LATTICE = ('ltHash', 64)
+
+class Topology(Enum):
+    SEQUENTIAL = 1
+    MERKLE = 2
+    ADD = 3
+
+class InputType(Enum):
+    FILES = 1
+    MODEL = 2
+    DATASET = 3
 
 
 def _cudaGetErrorEnum(error):
@@ -200,117 +237,20 @@ def _check_pki_options(args: argparse.Namespace):
         log.warning("No certificate chain provided")
 
 
-def sign_files(path, hasher, chunk=8192):
-    path = pathlib.Path(path)
-    logging.basicConfig(level=logging.INFO)
-    args = _arguments()
-    payload_signer = _get_payload_signer(args)
-
-    def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
-        return file.SimpleFileHasher(
-            file=file_path, content_hasher=hasher, chunk_size=chunk
-        )
-
-    serializer = serialize_by_file.ManifestSerializer(
-        file_hasher_factory=hasher_factory
-    )
-
-    t0 = time.monotonic()
-    for _ in range(SAMPLE_SIZE):
-        sig = model.sign_file(
-            model_path=path,
-            signer=payload_signer,
-            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-            serializer=serializer,
-            ignore_paths=[args.sig_out],
-        )
-    t1 = time.monotonic()
-    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
-    sig.write(args.sig_out)
-
-
-def sign_data(dataset, hasher):
-    # dataset already on GPU
-    logging.basicConfig(level=logging.INFO)
-    args = _arguments()
-
-    payload_signer = _get_payload_signer(args)
-
-    def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
-        return state.SimpleStateHasher(
-            state=state_dict, content_hasher=hasher
-        )
-
-    serializer = serialize_by_state.ManifestSerializer(
-        state_hasher_factory=hasher_factory
-    )
-
-    checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
-    t0 = time.monotonic()
-    for _ in range(SAMPLE_SIZE):
-        sig = model.sign_state(
-            states=states,
-            signer=payload_signer,
-            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-            serializer=serializer,
-        )
-        checkCudaErrors(runtime.cudaDeviceSynchronize()) # safe measure
-        print(f'Digest: {hasher.digest[:8].hex()}')
-    t1 = time.monotonic()
-    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
-    sig.write(args.sig_out)
-
-
-def sign_model(net, hasher):
-    net = net.to('cuda')
-    logging.basicConfig(level=logging.INFO)
-    args = _arguments()
-
-    payload_signer = _get_payload_signer(args)
-
-    def hasher_factory(state_dict: collections.OrderedDict) -> state.StateHasher:
-        return state.SimpleStateHasher(
-            state=state_dict, content_hasher=hasher
-        )
-
-    serializer = serialize_by_state.ManifestSerializer(
-        state_hasher_factory=hasher_factory
-    )
-
-    states = {'state_dict': net.state_dict(),}
-
-    digests = []
-
-    t0 = time.monotonic()
-    for _ in range(SAMPLE_SIZE):
-        sig = model.sign_state(
-            states=states,
-            signer=payload_signer,
-            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-            serializer=serializer,
-        )
-        digests.append(hasher.digest)
-    t1 = time.monotonic()
-
-    if len(set(digests)) == 1:
-        print(f'Digest: {digests[0][:8].hex()}')
-    else:
-        raise RuntimeError('Digests inconsistent')
-    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
-    sig.write(args.sig_out)
-
-
 def compile(algo, prefixes):
-    driver.cuInit(0)
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
     # get device arch
     major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
     minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-    opts = [b'--fmad=false', arch_arg, b'-Imodel_signing/cuda', b'-I/usr/lib/gcc/x86_64-linux-gnu/11/include/stddef.h']
 
-    with open('model_signing/cuda/%s.cuh' % algo, 'r') as f:
+    currPath = os.path.dirname(os.path.abspath(__file__))
+    inclPath = os.path.join(currPath, 'model_signing/cuda')
+    opts = [b'--fmad=false', arch_arg, b'-I' + inclPath.encode()]
+
+    srcPath = os.path.join(inclPath, '%s.cuh' % algo)
+    with open(srcPath, 'r') as f:
         code = f.read()
     # parse cuda code from file
     prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cuh', 'utf-8'), 0, [], []))
@@ -335,15 +275,92 @@ def compile(algo, prefixes):
         funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'{p}{algo}', 'utf-8'))))
     return ctx, funcs
 
+def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
+    # lattice can be further parallelised during reduction step
+    rF = 1
+    if hashType == HashType.LATTICE:
+        rF = 8
+
+    # early compilation of cuda modules
+    if topology == Topology.SEQUENTIAL:
+        ctx, [seq] = compile(hashType.value[0], ['seq_'])
+        hasher = memory.SeqGPU(seq, ctx, hashType.value[1])
+
+    elif topology == Topology.MERKLE:
+        ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
+        hasher = memory.MerkleGPU(hashB, reduce, ctx, hashType.value[1], rF)
+
+    elif topology == Topology.ADD:
+        if hashType != HashType.LATTICE:
+            raise RuntimeError('Hash addition must use Lattice Hashing')
+        ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
+        hasher = memory.AddGPU(hashB, reduce, ctx, hashType.value[1], rF, 7)
+
+    logging.basicConfig(level=logging.INFO)
+    args = _arguments()
+    payload_signer = _get_payload_signer(args)
+    digestPrev = None
+
+    for _ in range(SAMPLE_SIZE):
+        if inputType == InputType.FILES:
+            def hasher_factory(item) -> hashing.HashEngine:
+                return file.SimpleFileHasher(file=item, content_hasher=hasher)
+            serializer = serialize_by_file.ManifestSerializer(
+                file_hasher_factory=hasher_factory)
+
+            sig = model.sign(
+                item=pathlib.Path(item),
+                signer=payload_signer,
+                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+                serializer=serializer,
+                ignore_paths=[args.sig_out],
+            )
+
+        elif inputType == InputType.MODEL:
+            def hasher_factory(item) -> hashing.HashEngine:
+                return state.SimpleStateHasher(state=item, content_hasher=hasher)
+            serializer = serialize_by_state.ManifestSerializer(
+                state_hasher_factory=hasher_factory)
+
+            sig = model.sign(
+                item=item.to('cuda').state_dict(),
+                signer=payload_signer,
+                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+                serializer=serializer,
+            )
+
+        elif inputType == InputType.DATASET:
+            def hasher_factory(item) -> hashing.HashEngine:
+                return state.SimpleDatasetHasher(dataset=item, content_hasher=hasher)
+            serializer = serialize_by_dataset.ManifestSerializer(
+                dataset_hasher_factory=hasher_factory)
+
+            sig = model.sign(
+                item=item.to('cuda'),
+                signer=payload_signer,
+                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+                serializer=serializer,
+            )
+
+        # if digestPrev:
+        #     assert(digestPrev == hasher.digest)
+        # digestPrev = hasher.digest
+
+    print(f'Hash runtime: {1000*(hasher.runtime)/SAMPLE_SIZE:.2f} ms')
+
+    sig.write(args.sig_out)
+    return hasher.digest
+
+
 if __name__ == "__main__":
     PATH = './model.pth'
     models = [
         ('pytorch/vision:v0.10.0', 'resnet152'),
-        # ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-        # ('pytorch/vision:v0.10.0', 'vgg19'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+        ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+        ('pytorch/vision:v0.10.0', 'vgg19'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
     ]
 
     for m in models:
@@ -352,7 +369,7 @@ if __name__ == "__main__":
         elif len(m) == 3:
             net = torch.hub.load(m[0], m[1], m[2])
 
-        print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
+        print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
         # t0 = time.monotonic()
         # torch.save(net, PATH)
         # t1 = time.monotonic()
@@ -363,22 +380,20 @@ if __name__ == "__main__":
         # t1 = time.monotonic()
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for (algo, size) in [('sha256', 32), ('blake2b', 64), ('sha3', 64)]:
+        # for hashType in HashType:
             # print(f'CPU Hashing from file using {algo}')
             # if algo == 'sha256':
-            #     sign_files(PATH, memory.SHA256())
+            #     sign(PATH, memory.SHA256(), InputType.FILES)
             # elif algo == 'blake2b':
-            #     sign_files(PATH, memory.BLAKE2())
+            #     sign(PATH, memory.BLAKE2(), InputType.FILES)
 
-            ctx, [seq, hashblock, reduce] = compile(algo, ['seq_', 'merkle_hash_', 'merkle_reduce_'])
-            # print(f'SeqGPU-{algo}')
-            # sign_model(net, memory.SeqGPU(seq, ctx, 32))
+            # print(f'SeqGPU-{hashType.name}')
+            # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
+            # print(f'MerkleGPU-{hashType.name}')
+            # sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
-            print(f'MerkleGPU-{algo}')
-            sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, size, 1))
-        
-        # print(f'LatticeGPU-blake2xb')
-        # ctx, [hashblock, reduce] = compile('ltHash', ['hash_', 'add_'])
-        # sign_model(net, memory.HashAndReduceGPU(hashblock, reduce, ctx, 64, 8))
+        # unsupported for v0
+        print(f'AddGPU-lattice')
+        sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
         
         del net

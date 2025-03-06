@@ -82,7 +82,7 @@ class StateSerializer(serialization.Serializer):
     @override
     def serialize(
         self,
-        states: dict[str, collections.OrderedDict],
+        state: collections.OrderedDict,
     ) -> manifest.Manifest:
         """Serializes the model given by the `model_path` argument.
 
@@ -96,16 +96,8 @@ class StateSerializer(serialization.Serializer):
             ValueError: The model contains a symbolic link, but the serializer
               was not initialized with `allow_symlinks=True`.
         """
-        manifest_items = []
-        with concurrent.futures.ThreadPoolExecutor(
-            max_workers=self._max_workers
-        ) as tpe:
-            futures = [
-                tpe.submit(self._compute_hash, state)
-                for state in states.items()
-            ]
-            for future in concurrent.futures.as_completed(futures):
-                manifest_items.append(future.result())
+        digest = self._compute_hash(('state_dict', state))
+        manifest_items = [digest]
 
         return self._build_manifest(manifest_items)
 

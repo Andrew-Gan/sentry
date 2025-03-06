@@ -210,7 +210,7 @@ void seq_blake2b(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 }
 
 extern "C" __global__
-void merkle_hash_blake2b(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
+void hash_blake2b(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
 	uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t n) {
 
     BLAKE2B_CTX ctx;
@@ -218,7 +218,7 @@ void merkle_hash_blake2b(uint8_t *out, uint64_t blockSize, uint64_t *startThread
 }
 
 extern "C" __global__
-void merkle_reduce_blake2b(uint8_t *out, uint8_t *in, size_t n) {
+void reduce_blake2b(uint8_t *out, uint8_t *in, size_t n) {
 	extern __shared__ uint8_t shMem[];
     BLAKE2B_CTX ctx;
 	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 64);

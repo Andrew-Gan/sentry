@@ -68,7 +68,7 @@ size_t getChecksumSizeBytes(uint64_t N, uint64_t B) {
 }
 
 extern "C" __global__
-void hash_ltHash(uint8_t *out, uint64_t block, uint64_t *startThread,
+void hash_ltHash(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
 	uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t n) {
 
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -77,13 +77,13 @@ void hash_ltHash(uint8_t *out, uint64_t block, uint64_t *startThread,
     uint64_t workId = 0;
     while (workId < l && i >= startThread[workId]) { workId++; }
     workId--;
-    uint8_t *myIn = workAddr[workId] + block * (i - startThread[workId]);
+    uint8_t *myIn = workAddr[workId] + blockSize * (i - startThread[workId]);
     uint8_t *workEnd = workAddr[workId] + workSize[workId];
 
     BLAKE2XB_CTX ctx;
     uint64_t key = 0xfedcba9876543210UL;
     cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX, (uint8_t*)&key, sizeof(key));
-    cuda_blake2xb_update(&ctx, myIn, block < workEnd - myIn ? block : workEnd - myIn);
+    cuda_blake2xb_update(&ctx, workAddr[workId], min(blockSize, workEnd - myIn));
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
@@ -96,7 +96,7 @@ void ltHash_add_warp(uint64_t *sdata, uint64_t tid) {
 }
 
 extern "C" __global__
-void add_ltHash(uint64_t *out, uint64_t *in) {
+void reduce_ltHash(uint64_t *out, uint64_t *in) {
     extern __shared__ uint64_t sdata[];
     uint64_t tid = threadIdx.x;
     uint64_t digestId = (2 * blockDim.x) * blockIdx.x + tid;
