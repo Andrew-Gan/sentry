@@ -45,7 +45,6 @@ from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 import collections
 import math
-import time
 
 def _cudaGetErrorEnum(error):
     if isinstance(error, driver.CUresult):
@@ -188,6 +187,7 @@ class SeqGPU(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self.digestSize
 
+import time
 
 class MerkleGPU(hashing.StreamingHashEngine):
     # reduce factor is 1 for normal hashing
@@ -199,10 +199,13 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.reduce = reduce
         self.digestSize = digestsize
         self.reduceFactor = reducefactor
+        self.runtime = 0
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
         # prevfree, _ = checkCudaErrors(runtime.cudaMemGetInfo())
+
+        start = time.monotonic()
 
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
@@ -261,6 +264,9 @@ class MerkleGPU(hashing.StreamingHashEngine):
         checkCudaErrors(runtime.cudaFreeAsync(oData[0], stream))
         checkCudaErrors(runtime.cudaStreamSynchronize(stream))
         checkCudaErrors(runtime.cudaStreamDestroy(stream))
+
+        checkCudaErrors(runtime.cudaDeviceSynchronize())
+        self.runtime += time.monotonic()-start
 
     @override
     def reset(self, data: bytes = b"") -> None:

@@ -20,20 +20,37 @@ import logging
 import pathlib
 import collections
 
-from .model_signing import model
-from .model_signing.hashing import hashing
-from .model_signing.hashing import file
-from .model_signing.hashing import state
-from .model_signing.hashing import memory
-from .model_signing.serialization import serialize_by_file
-from .model_signing.serialization import serialize_by_state
-from .model_signing.signature import fake
-from .model_signing.signature import key
-from .model_signing.signature import pki
-from .model_signing.signing import in_toto
-from .model_signing.signing import in_toto_signature
-from .model_signing.signing import signing
-from .model_signing.signing import sigstore
+if __name__ == "__main__":
+    from model_signing import model
+    from model_signing.hashing import hashing
+    from model_signing.hashing import file
+    from model_signing.hashing import state
+    from model_signing.hashing import memory
+    from model_signing.serialization import serialize_by_file
+    from model_signing.serialization import serialize_by_state
+    from model_signing.signature import fake
+    from model_signing.signature import key
+    from model_signing.signature import pki
+    from model_signing.signing import in_toto
+    from model_signing.signing import in_toto_signature
+    from model_signing.signing import signing
+    from model_signing.signing import sigstore
+else:
+    from .model_signing import model
+    from .model_signing.hashing import hashing
+    from .model_signing.hashing import file
+    from .model_signing.hashing import state
+    from .model_signing.hashing import memory
+    from .model_signing.serialization import serialize_by_file
+    from .model_signing.serialization import serialize_by_state
+    from .model_signing.signature import fake
+    from .model_signing.signature import key
+    from .model_signing.signature import pki
+    from .model_signing.signing import in_toto
+    from .model_signing.signing import in_toto_signature
+    from .model_signing.signing import signing
+    from .model_signing.signing import sigstore
+
 import torch
 import time
 from cuda.bindings import driver, nvrtc, runtime
@@ -233,7 +250,6 @@ def compile(algo, prefixes):
     opts = [b'--fmad=false', arch_arg, b'-I' + inclPath.encode()]
 
     srcPath = os.path.join(inclPath, '%s.cuh' % algo)
-    print(currPath, inclPath, srcPath, flush=True)
     with open(srcPath, 'r') as f:
         code = f.read()
     # parse cuda code from file
@@ -284,13 +300,13 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
     args = _arguments()
     payload_signer = _get_payload_signer(args)
 
-    t0 = time.monotonic()
     for _ in range(SAMPLE_SIZE):
         if inputType == InputType.FILES:
             def hasher_factory(item) -> hashing.HashEngine:
                 return file.SimpleFileHasher(file=item, content_hasher=hasher)
             serializer = serialize_by_file.ManifestSerializer(
                 file_hasher_factory=hasher_factory)
+
             sig = model.sign(
                 item=pathlib.Path(item),
                 signer=payload_signer,
@@ -304,6 +320,7 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
                 return state.SimpleStateHasher(state=item, content_hasher=hasher)
             serializer = serialize_by_state.ManifestSerializer(
                 state_hasher_factory=hasher_factory)
+
             sig = model.sign(
                 item=item.to('cuda').state_dict(),
                 signer=payload_signer,
@@ -316,6 +333,7 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
                 return state.SimpleDatasetHasher(dataset=item, content_hasher=hasher)
             serializer = serialize_by_dataset.ManifestSerializer(
                 dataset_hasher_factory=hasher_factory)
+
             sig = model.sign(
                 item=item.to('cuda'),
                 signer=payload_signer,
@@ -326,8 +344,8 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
         # if digestPrev:
         #     assert(digestPrev == hasher.digest)
         # digestPrev = hasher.digest
-    t1 = time.monotonic()
-    print(f'Runtime: {1000*(t1-t0)/SAMPLE_SIZE:.2f} ms')
+
+    print(f'Hash runtime: {1000*(hasher.runtime)/SAMPLE_SIZE:.2f} ms')
 
     sig.write(args.sig_out)
     return hasher.digest
@@ -338,8 +356,8 @@ if __name__ == "__main__":
     models = [
         ('pytorch/vision:v0.10.0', 'resnet152'),
         ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-        ('pytorch/vision:v0.10.0', 'vgg19'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+        ('pytorch/vision:v0.10.0', 'vgg19'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
     ]
@@ -350,7 +368,7 @@ if __name__ == "__main__":
         elif len(m) == 3:
             net = torch.hub.load(m[0], m[1], m[2])
 
-        print(f'Hashing {net.__class__.__name__}, num param: {sum(p.numel() for p in net.parameters())}')
+        print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
         # t0 = time.monotonic()
         # torch.save(net, PATH)
         # t1 = time.monotonic()

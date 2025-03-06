@@ -15,4 +15,8 @@ WORKDIR /home
 RUN openssl ecparam -name prime256v1 -genkey -noout -out private.pem
 RUN openssl ec -in private.pem -pubout -out public.pem
 
-CMD ["python3", "main.py", "--model_path", "/home/torch", "private-key", "--private_key", "private.pem"]
+WORKDIR /home/src
+CMD ["python3", "sign.py", "--model_path", "/home/torch", "private-key", "--private_key", "../private.pem"]
+
+# WORKDIR /home
+# CMD ["python3", "main.py", "--model_path", "/home/torch", "private-key", "--private_key", "private.pem"]
