@@ -294,7 +294,7 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
         if hashType != HashType.LATTICE:
             raise RuntimeError('Hash addition must use Lattice Hashing')
         ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
-        hasher = memory.AddGPU(hashB, reduce, ctx, hashType.value[1], rF, 7)
+        hasher = memory.AddGPU(hashB, reduce, ctx, hashType.value[1], rF)
 
     logging.basicConfig(level=logging.INFO)
     args = _arguments()

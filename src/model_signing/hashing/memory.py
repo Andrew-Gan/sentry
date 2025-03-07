@@ -213,8 +213,6 @@ class MerkleGPU(hashing.StreamingHashEngine):
         currBlock = 0
         iData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
         oData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
-
-        t = [0, 0, 0, 0]
         
         for i, (s, v, nBlock) in enumerate(zip(streams, data.values(), nBlocks)):
             nThread = nBlock
@@ -240,7 +238,6 @@ class MerkleGPU(hashing.StreamingHashEngine):
                 nThread = (nBlock // 2) * self.reduceFactor
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
-
                 nThread = np.array([nThread], dtype=np.uint64)
                 args = [myOut[1], myIn[1], nThread]
                 args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
@@ -314,15 +311,12 @@ class MerkleGPU(hashing.StreamingHashEngine):
         return self.digestSize
 
 class AddGPU(hashing.StreamingHashEngine):
-    def __init__(self, hashblock, adder, ctx, digestsize, reducefactor, batchsizepow2):
+    def __init__(self, hashblock, adder, ctx, digestsize, reducefactor):
         self.ctx = ctx
         self.hashblock = hashblock
         self.adder = adder
         self.digestSize = digestsize
         self.reduceFactor = reducefactor
-        if batchsizepow2 > 7 or batchsizepow2 < 0:
-            raise RuntimeError('batchsizepow2 must be between 0 and 7')
-        self.batchSize = 1 << batchsizepow2
         self.runtime = 0
 
     @override
@@ -331,8 +325,7 @@ class AddGPU(hashing.StreamingHashEngine):
 
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        numStreams = (len(data) + self.batchSize - 1) // self.batchSize
-        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(numStreams)]
+        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
         digestSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         digestSum = (digestSum, np.array([digestSum], dtype=np.uint64))
@@ -342,42 +335,48 @@ class AddGPU(hashing.StreamingHashEngine):
         for stream, value in zip(streams, data.values()):
             size = value.nbytes
             sizeA = np.array([size], dtype=np.uint64)
-            nThread = (size + (blockSize-1)) // blockSize
+            nBlock = (size + (blockSize-1)) // blockSize
             tensor = np.array([value.data_ptr()], dtype=np.uint64)
-            digests = checkCudaErrors(runtime.cudaMallocAsync(nThread*self.digestSize, stream))
-            digests = (digests, np.array([digests], dtype=np.uint64))
+            iData = checkCudaErrors(runtime.cudaMallocAsync(nBlock*self.digestSize, stream))
+            oData = checkCudaErrors(runtime.cudaMallocAsync(nBlock*self.digestSize, stream))
+            iData = (iData, np.array([iData], dtype=np.uint64))
+            oData = (oData, np.array([oData], dtype=np.uint64))
 
-            args = [digests[1], tensor, blockSizeA, sizeA]
+            args = [oData[1], tensor, blockSizeA, sizeA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+            nThread = nBlock
             block = min(512, nThread)
-            grid = (nThread + (block-1)) // block
+            grid = (nThread + block - 1) // block
+
+            # print(grid, block)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashblock, grid, 1, 1, block, 1, 1, 0, stream,
                 args.ctypes.data, 0,
             ))
-            nThread = max(1, nThread // 2 * self.reduceFactor)
 
-            addOut = np.array([True], dtype=bool)
-            args = [digestSum[1], digests[1], addOut]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            block = min(512, nThread)
-            grid = (nThread + (block-1)) // block
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.adder, grid, 1, 1, block, 1, 1, block * self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-            checkCudaErrors(runtime.cudaFreeAsync(digests[0], stream))
+            while nBlock > 1:
+                iData, oData = oData, iData
+                nBlock = ((nBlock + 1) & ~0b1)
+                nThread = (nBlock // 2) * self.reduceFactor
+                block = min(512, nThread)
+                grid = (nThread + (block-1)) // block
+                args = [oData[1], iData[1]]
+                args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+                checkCudaErrors(driver.cuLaunchKernel(
+                    self.adder, grid, 1, 1, block, 1, 1, block * self.digestSize,
+                    stream, args.ctypes.data, 0,
+                ))
+                nBlock = grid
         
-        for s in streams:
-            checkCudaErrors(runtime.cudaStreamSynchronize(s))
-            checkCudaErrors(runtime.cudaStreamDestroy(s))
+        for stream in streams:
+            checkCudaErrors(runtime.cudaStreamSynchronize(stream))
+            checkCudaErrors(runtime.cudaStreamDestroy(stream))
         
         checkCudaErrors(runtime.cudaMemcpy(self.digest, digestSum[0],
             self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
         checkCudaErrors(runtime.cudaFree(digestSum[0]))
 
-        checkCudaErrors(runtime.cudaDeviceSynchronize())
-        self.runtime += time.monotonic()-start
+        self.runtime += time.monotonic() - start
 
     @override
     def reset(self, data: bytes = b"") -> None:

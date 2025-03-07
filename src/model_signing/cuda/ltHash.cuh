@@ -81,14 +81,6 @@ void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
-__device__
-void ltHash_add_warp(uint64_t *sdata, uint64_t tid) {
-    for (int numThread = 32; numThread >= 8; numThread /= 2) {
-        if (tid < numThread)
-            add(sdata[tid], sdata[tid + numThread], sdata + tid);
-    }
-}
-
 extern "C" __global__
 void reduce_ltHash(uint64_t *out, uint64_t *in) {
     extern __shared__ uint64_t sdata[];
@@ -104,11 +96,18 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
         }
         __syncthreads();
     }
-    ltHash_add_warp(sdata, tid);
+    for (int numThread = 32; numThread >= 8; numThread /= 2) {
+        if (tid < numThread)
+            add(sdata[tid], sdata[tid + numThread], sdata + tid);
+    }
     uint64_t U64PerHash = BLAKE2B_BYTES_MAX / sizeof(*out);
     if (tid < U64PerHash) {
-        uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
-        *(out + blockOffsetU64 + tid) = sdata[tid];
+        if (gridDim.x == 1)
+            add(*(out+tid), sdata[tid], out+tid);
+        else {
+            uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
+            *(out + blockOffsetU64 + tid) = sdata[tid];
+        }
     }
 }
 
