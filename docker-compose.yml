@@ -6,6 +6,7 @@ services:
     container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
+      - /share/sign-ml/dataset/DALI_extra:/home/DALI_extra
     deploy:
       resources:
         limits:

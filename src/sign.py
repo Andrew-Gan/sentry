@@ -74,9 +74,8 @@ class Topology(Enum):
     ADD = 3
 
 class InputType(Enum):
-    FILES = 1
-    MODEL = 2
-    DATASET = 3
+    FILE = 1
+    GPU = 2
 
 
 def _cudaGetErrorEnum(error):
@@ -275,7 +274,39 @@ def compile(algo, prefixes):
         funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'{p}{algo}', 'utf-8'))))
     return ctx, funcs
 
-def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
+def sign_cpu(path, hashType: HashType):
+    logging.basicConfig(level=logging.INFO)
+    args = _arguments()
+
+    payload_signer = _get_payload_signer(args)
+
+    if hashType == HashType.SHA256:
+        def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
+            return file.SimpleFileHasher(
+                file=file_path, content_hasher=memory.SHA256()
+            )
+
+    elif hashType == HashType.BLAKE2B:
+        def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
+            return file.SimpleFileHasher(
+                file=file_path, content_hasher=memory.BLAKE2()
+            )
+
+    serializer = serialize_by_file.ManifestSerializer(
+        file_hasher_factory=hasher_factory
+    )
+
+    sig = model.sign(
+        item=pathlib.Path(path),
+        signer=payload_signer,
+        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+        serializer=serializer,
+        ignore_paths=[args.sig_out],
+    )
+
+    sig.write(args.sig_out)
+
+def sign_gpu(item, hashType: HashType, topology : Topology, inputType : InputType):
     # lattice can be further parallelised during reduction step
     rF = 1
     if hashType == HashType.LATTICE:
@@ -301,7 +332,7 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
     payload_signer = _get_payload_signer(args)
 
     for _ in range(SAMPLE_SIZE):
-        if inputType == InputType.FILES:
+        if inputType == InputType.FILE:
             def hasher_factory(item) -> hashing.HashEngine:
                 return file.SimpleFileHasher(file=item, content_hasher=hasher)
             serializer = serialize_by_file.ManifestSerializer(
@@ -315,24 +346,11 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
                 ignore_paths=[args.sig_out],
             )
 
-        elif inputType == InputType.MODEL:
+        elif inputType == InputType.GPU:
             def hasher_factory(item) -> hashing.HashEngine:
                 return state.SimpleStateHasher(state=item, content_hasher=hasher)
             serializer = serialize_by_state.ManifestSerializer(
                 state_hasher_factory=hasher_factory)
-
-            sig = model.sign(
-                item=item.to('cuda').state_dict(),
-                signer=payload_signer,
-                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-                serializer=serializer,
-            )
-
-        elif inputType == InputType.DATASET:
-            def hasher_factory(item) -> hashing.HashEngine:
-                return state.SimpleDatasetHasher(dataset=item, content_hasher=hasher)
-            serializer = serialize_by_dataset.ManifestSerializer(
-                dataset_hasher_factory=hasher_factory)
 
             sig = model.sign(
                 item=item.to('cuda'),
@@ -360,6 +378,7 @@ if __name__ == "__main__":
         ('pytorch/vision:v0.10.0', 'vgg19'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+        # ('huggingface/transformers', 'modelForCausalLM', 'Llama-2-7b-chat-hf'),
     ]
 
     for m in models:
@@ -370,7 +389,7 @@ if __name__ == "__main__":
 
         print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
         # t0 = time.monotonic()
-        # torch.save(net, PATH)
+        torch.save(net, PATH)
         # t1 = time.monotonic()
         # print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
@@ -380,20 +399,20 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for hashType in HashType:
-            # print(f'CPU Hashing from file using {algo}')
-            # if algo == 'sha256':
-            #     sign(PATH, memory.SHA256(), InputType.FILES)
-            # elif algo == 'blake2b':
-            #     sign(PATH, memory.BLAKE2(), InputType.FILES)
+            # if hashType == HashType.SHA256 or hashType == HashType.BLAKE2B:
+            #     print(f'SeqCPU-{hashType.name}')
+            #     sign_cpu(PATH, hashType)
 
             # print(f'SeqGPU-{hashType.name}')
-            # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
+            # sign_cpu(net, hashType, Topology.SEQUENTIAL, InputType.FILE)
 
             print(f'MerkleGPU-{hashType.name}')
-            sign(net, hashType, Topology.MERKLE, InputType.MODEL)
+            net = net.to('cuda')
+            sign_gpu(net.state_dict(), hashType, Topology.MERKLE, InputType.GPU)
 
         # unsupported for v0
         # print(f'AddGPU-lattice')
-        # sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
+        # net = net.to('cuda')
+        # sign_gpu(net.state_dict(), HashType.LATTICE, Topology.ADD, InputType.GPU)
         
         del net

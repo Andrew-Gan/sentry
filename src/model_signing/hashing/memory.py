@@ -134,9 +134,12 @@ class SeqGPU(hashing.StreamingHashEngine):
         self.ctx = ctx
         self.hash = hash
         self.digestSize = digest_size
+        self.runtime = 0
     
     @override
     def update(self, data: collections.OrderedDict, blockSize: int) -> None:
+        t0 = time.monotonic()
+
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         total_size = sum(d.nbytes for d in data.values())
@@ -168,6 +171,8 @@ class SeqGPU(hashing.StreamingHashEngine):
         checkCudaErrors(runtime.cudaFreeAsync(iData, stream))
         checkCudaErrors(runtime.cudaFreeAsync(oData, stream))
         checkCudaErrors(runtime.cudaStreamDestroy(stream))
+
+        self.runtime += time.monotonic()
     
     @override
     def reset(self, data: bytes = b"") -> None:

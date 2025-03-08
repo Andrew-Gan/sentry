@@ -6,12 +6,13 @@ import torch
 import os
 import time
 
-from src.sign import sign, HashType, Topology, InputType
+from src.sign import sign_gpu, HashType, Topology, InputType
 
 # To run with different data, see documentation of nvidia.dali.fn.readers.file
 # points to https://github.com/NVIDIA/DALI_extra
 data_root_dir = os.environ['DALI_EXTRA_PATH']
 images_dir = os.path.join(data_root_dir, 'db', 'single', 'jpeg')
+npy_dir = os.path.join(data_root_dir, 'db', '3D', 'MRI', 'Knee', 'npy_3d', 'STU00001')
 
 
 def loss_func(pred, y):
@@ -27,12 +28,12 @@ def backward(loss, model):
 
 
 @pipeline_def(num_threads=4, device_id=0)
-def get_dali_pipeline():
+def get_dali_pipeline_cpu():
     images, labels = fn.readers.file(
         file_root=images_dir, random_shuffle=True, name="Reader")
     # entrypoint into hashing lib
-    digest = sign(images, HashType.SHA256, Topology.MERKLE, InputType.DATASET)
-    print(f'{digest.hex()}')
+    # digest = sign_gpu(images, HashType.SHA256, Topology.MERKLE, InputType.GPU)
+    # print(f'{digest.hex()}')
     # decode data on the GPU
     images = fn.decoders.image_random_crop(
         images, device="mixed", output_type=types.RGB)
@@ -47,16 +48,32 @@ def get_dali_pipeline():
         mirror=fn.random.coin_flip())
     return images, labels
 
-dali_loader = DALIGenericIterator(
-    [get_dali_pipeline(batch_size=16)],
+dali_loader_cpu = DALIGenericIterator(
+    [get_dali_pipeline_cpu(batch_size=16)],
     ['data', 'label'],
     reader_name='Reader'
 )
 
-dali_loader = DALIGenericIterator(
-    [get_dali_pipeline_with_hashing(batch_size=16)],
+@pipeline_def(num_threads=4, device_id=0)
+def get_dali_pipeline_gpu():
+    images = fn.readers.numpy(
+        file_root=npy_dir, random_shuffle=True, device='gpu')
+    # decode data on the GPU
+    images = fn.random_resized_crop(
+        images, size=[256, 256], device='gpu')
+    # the rest of processing happens on the GPU as well
+    images = fn.crop_mirror_normalize(
+        images,
+        crop_h=224,
+        crop_w=224,
+        mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
+        std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
+        mirror=fn.random.coin_flip(), device='gpu')
+    return images, 0
+
+dali_loader_gpu = DALIGenericIterator(
+    [get_dali_pipeline_gpu(batch_size=16)],
     ['data', 'label'],
-    reader_name='Reader'
 )
 
 model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
