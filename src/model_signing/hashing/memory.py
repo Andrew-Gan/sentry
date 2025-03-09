@@ -331,17 +331,17 @@ class AddGPU(hashing.StreamingHashEngine):
         digestSum = (digestSum, np.array([digestSum], dtype=np.uint64))
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
-        layerBytes = [(v.data_ptr(), v.nbytes) for v in data.values()]
         sortedLayers = sorted(
-            layerBytes, 
+            [(v.data_ptr(), v.nbytes) for v in data.values()], 
             key=lambda x: x[1]
         )
         totalBlocks = sum((size + (blockSize-1)) // blockSize for _, size in sortedLayers)
         iDataFull = checkCudaErrors(runtime.cudaMalloc(totalBlocks*self.digestSize))
         oDataFull = checkCudaErrors(runtime.cudaMalloc(totalBlocks*self.digestSize))
+        digestResidence = [True] * len(data.values()) # True: iData, False: oData
         currBytes = 0
 
-        for stream, (value, size) in zip(streams, sortedLayers):
+        for i, (stream, (value, size)) in enumerate(zip(streams, sortedLayers)):
             sizeA = np.array([size], dtype=np.uint64)
             nBlock = (size + (blockSize-1)) // blockSize
             tensor = np.array([value], dtype=np.uint64)
@@ -358,6 +358,7 @@ class AddGPU(hashing.StreamingHashEngine):
                 self.hashblock, grid, 1, 1, block, 1, 1, 0, stream,
                 args.ctypes.data, 0,
             ))
+            digestResidence[i] = not digestResidence[i]
 
             while nBlock > 1:
                 iData, oData = oData, iData
@@ -372,13 +373,17 @@ class AddGPU(hashing.StreamingHashEngine):
                     stream, args.ctypes.data, 0,
                 ))
                 nBlock = grid
-            currBytes += nBlock * blockSize
+                digestResidence[i] = not digestResidence[i]
+            currBytes += nBlock * self.digestSize
         
         currBytes = 0
-        for stream, (_, size) in zip(streams, sortedLayers):
+        for i, (stream, (_, size)) in enumerate(zip(streams, sortedLayers)):
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-            oData = np.array([oDataFull + currBytes], dtype=np.uint64)
-            args = [digestSum[1], oData]
+            if digestResidence[i]:
+                digestData = np.array([iDataFull + currBytes], dtype=np.uint64)
+            else:
+                digestData = np.array([oDataFull + currBytes], dtype=np.uint64)
+            args = [digestSum[1], digestData]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
@@ -387,8 +392,8 @@ class AddGPU(hashing.StreamingHashEngine):
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
             checkCudaErrors(runtime.cudaStreamDestroy(stream))
             nBlock = (size + (blockSize-1)) // blockSize
-            currBytes += nBlock * blockSize
-        
+            currBytes += nBlock * self.digestSize
+
         checkCudaErrors(runtime.cudaFree(iDataFull))
         checkCudaErrors(runtime.cudaFree(oDataFull))
         

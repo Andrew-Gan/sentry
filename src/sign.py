@@ -355,11 +355,11 @@ if __name__ == "__main__":
     PATH = './model.pth'
     models = [
         ('pytorch/vision:v0.10.0', 'resnet152'),
-        # ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-        # ('pytorch/vision:v0.10.0', 'vgg19'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+        ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+        ('pytorch/vision:v0.10.0', 'vgg19'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
+        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
     ]
 
     for m in models:
@@ -379,18 +379,18 @@ if __name__ == "__main__":
         # t1 = time.monotonic()
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        # for hashType in HashType:
-            # print(f'CPU Hashing from file using {algo}')
-            # if algo == 'sha256':
-            #     sign(PATH, memory.SHA256(), InputType.FILES)
-            # elif algo == 'blake2b':
-            #     sign(PATH, memory.BLAKE2(), InputType.FILES)
+        for hashType in HashType:
+        #     print(f'CPU Hashing from file using {algo}')
+        #     if algo == 'sha256':
+        #         sign(PATH, memory.SHA256(), InputType.FILES)
+        #     elif algo == 'blake2b':
+        #         sign(PATH, memory.BLAKE2(), InputType.FILES)
 
-            # print(f'SeqGPU-{hashType.name}')
-            # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
+        #     print(f'SeqGPU-{hashType.name}')
+        #     sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
 
-            # print(f'MerkleGPU-{hashType.name}')
-            # sign(net, hashType, Topology.MERKLE, InputType.MODEL)
+            print(f'MerkleGPU-{hashType.name}')
+            sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
         # unsupported for v0
         print(f'AddGPU-lattice')
