@@ -90,24 +90,21 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
     uint64_t *rhs = in + digestId + blockDim.x;
     add(*lhs, *rhs, sdata+tid);
 
-    for (uint64_t numThread = blockDim.x / 2; numThread > 32; numThread /= 2) {
+    uint64_t numThread = blockDim.x / 2;
+    for (; numThread > 32; numThread /= 2) {
         if (tid < numThread) {
             add(sdata[tid], sdata[tid + numThread], sdata + tid);
         }
         __syncthreads();
     }
-    for (int numThread = 32; numThread >= 8; numThread /= 2) {
+    for (; numThread >= 8; numThread /= 2) {
         if (tid < numThread)
             add(sdata[tid], sdata[tid + numThread], sdata + tid);
     }
     uint64_t U64PerHash = BLAKE2B_BYTES_MAX / sizeof(*out);
     if (tid < U64PerHash) {
-        if (gridDim.x == 1)
-            add(*(out+tid), sdata[tid], out+tid);
-        else {
-            uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
-            *(out + blockOffsetU64 + tid) = sdata[tid];
-        }
+        uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
+        *(out + blockOffsetU64 + tid) = sdata[tid];
     }
 }
 
