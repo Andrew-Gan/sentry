@@ -62,7 +62,7 @@ jobs:
     steps:
     - run: git config --global core.autocrlf input
     - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-    - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+    - uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
       with:
         python-version: 3.11
         cache: pip
@@ -81,7 +81,7 @@ jobs:
         python -m venv venv
         .github/workflows/scripts/venv_activate.sh
         python slsa_for_models/main.py "$MODEL_TYPE"
-    - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+    - uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
       with:
         path: ${{ github.event.inputs.model_type || 'pytorch_jitted_model.pt' }}
         name: ${{ github.event.inputs.model_type || 'pytorch_jitted_model.pt' }}_${{ matrix.os_family }}
@@ -106,7 +106,7 @@ jobs:
       actions: read
       id-token: write
       contents: write
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.0.0
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: "${{ needs.train.outputs[format('hash-{0}', matrix.os)] }}"
       upload-assets: true # NOTE: This does nothing unless 'upload-tag-name' parameter is also set to an existing tag
