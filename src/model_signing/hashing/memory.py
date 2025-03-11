@@ -43,9 +43,9 @@ from . import hashing
 
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
+import cupy as cp
 import collections
-import math
-import time
+
 
 def _cudaGetErrorEnum(error):
     if isinstance(error, driver.CUresult):
@@ -130,6 +130,34 @@ class BLAKE2(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self._hasher.digest_size
 
+class SHA3(hashing.StreamingHashEngine):
+    """A wrapper around `hashlib.sha256`."""
+
+    def __init__(self, initial_data: bytes = b""):
+        self._hasher = hashlib.sha3_512(initial_data)
+
+    @override
+    def update(self, data: bytes) -> None:
+        self._hasher.update(data)
+
+    @override
+    def reset(self, data: bytes = b"") -> None:
+        self._hasher = hashlib.sha3_512(data)
+
+    @override
+    def compute(self) -> hashing.Digest:
+        return hashing.Digest(self.digest_name, self._hasher.digest())
+
+    @property
+    @override
+    def digest_name(self) -> str:
+        return "sha3"
+
+    @property
+    @override
+    def digest_size(self) -> int:
+        return self._hasher.digest_size
+
 class SeqGPU(hashing.StreamingHashEngine):
     def __init__(self, hash, ctx, digest_size):
         self.ctx = ctx
@@ -197,12 +225,9 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.reduce = reduce
         self.digestSize = digestsize
         self.reduceFactor = reducefactor
-        self.runtime = 0
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
-        start = time.monotonic()
-
         self.digest = bytes(self.digestSize)
         digests = checkCudaErrors(runtime.cudaMalloc(len(data)*self.digestSize))
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
@@ -290,8 +315,6 @@ class MerkleGPU(hashing.StreamingHashEngine):
         checkCudaErrors(runtime.cudaStreamSynchronize(stream))
         checkCudaErrors(runtime.cudaStreamDestroy(stream))
 
-        self.runtime += time.monotonic()-start
-
     @override
     def reset(self, data: bytes = b"") -> None:
         pass
@@ -317,27 +340,43 @@ class AddGPU(hashing.StreamingHashEngine):
         self.adder = adder
         self.digestSize = digestsize
         self.reduceFactor = reducefactor
-        self.runtime = 0
+        self.allocatedSpace = 1
+        self.iDataFull = checkCudaErrors(runtime.cudaMalloc(1))
+        self.oDataFull = checkCudaErrors(runtime.cudaMalloc(1))
+        digestSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+        self.digestSum = (digestSum, np.array([digestSum], dtype=np.uint64))
+    
+    def __del__(self):
+        checkCudaErrors(runtime.cudaFree(self.iDataFull))
+        checkCudaErrors(runtime.cudaFree(self.oDataFull))
+        checkCudaErrors(runtime.cudaFree(self.digestSum[0]))
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
-        start = time.monotonic()
-
-        self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
+        self.digest = bytes(self.digestSize)
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
-        digestSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-        digestSum = (digestSum, np.array([digestSum], dtype=np.uint64))
-
         blockSizeA = np.array([blockSize], dtype=np.uint64)
-        sortedLayers = sorted(
-            [(v.data_ptr(), v.nbytes) for v in data.values()], 
-            key=lambda x: x[1]
-        )
+        if 'dataset' in data:
+            sortedLayers = sorted(
+                [(v.data.ptr, v.nbytes) for v in data.values()], 
+                key=lambda x: x[1]
+            )
+        else:
+            sortedLayers = sorted(
+                [(v.data_ptr(), v.nbytes) for v in data.values()], 
+                key=lambda x: x[1]
+            )
         totalBlocks = sum((size + (blockSize-1)) // blockSize for _, size in sortedLayers)
-        iDataFull = checkCudaErrors(runtime.cudaMalloc(totalBlocks*self.digestSize))
-        oDataFull = checkCudaErrors(runtime.cudaMalloc(totalBlocks*self.digestSize))
+        
+        spaceToAlloc = totalBlocks*self.digestSize
+        if self.allocatedSpace < spaceToAlloc:
+            checkCudaErrors(runtime.cudaFree(self.iDataFull))
+            checkCudaErrors(runtime.cudaFree(self.oDataFull))
+            self.iDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
+            self.oDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
+            self.allocatedSpace = spaceToAlloc
         digestResidence = [True] * len(data.values()) # True: iData, False: oData
         currBytes = 0
 
@@ -345,8 +384,8 @@ class AddGPU(hashing.StreamingHashEngine):
             sizeA = np.array([size], dtype=np.uint64)
             nBlock = (size + (blockSize-1)) // blockSize
             tensor = np.array([value], dtype=np.uint64)
-            iData = np.array([iDataFull + currBytes], dtype=np.uint64)
-            oData = np.array([oDataFull + currBytes], dtype=np.uint64)
+            iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
+            oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
 
             args = [oData, tensor, blockSizeA, sizeA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
@@ -380,10 +419,10 @@ class AddGPU(hashing.StreamingHashEngine):
         for i, (stream, (_, size)) in enumerate(zip(streams, sortedLayers)):
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
             if digestResidence[i]:
-                digestData = np.array([iDataFull + currBytes], dtype=np.uint64)
+                digestData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
             else:
-                digestData = np.array([oDataFull + currBytes], dtype=np.uint64)
-            args = [digestSum[1], digestData]
+                digestData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
+            args = [self.digestSum[1], digestData]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
@@ -393,15 +432,9 @@ class AddGPU(hashing.StreamingHashEngine):
             checkCudaErrors(runtime.cudaStreamDestroy(stream))
             nBlock = (size + (blockSize-1)) // blockSize
             currBytes += nBlock * self.digestSize
-
-        checkCudaErrors(runtime.cudaFree(iDataFull))
-        checkCudaErrors(runtime.cudaFree(oDataFull))
         
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, digestSum[0],
+        checkCudaErrors(runtime.cudaMemcpy(self.digest, self.digestSum[0],
             self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
-        checkCudaErrors(runtime.cudaFree(digestSum[0]))
-
-        self.runtime += time.monotonic() - start
 
     @override
     def reset(self, data: bytes = b"") -> None:

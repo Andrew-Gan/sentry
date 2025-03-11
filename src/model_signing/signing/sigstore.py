@@ -26,11 +26,11 @@ from sigstore import sign as sigstore_signer
 from sigstore import verify as sigstore_verifier
 from typing_extensions import override
 
-from model_signing.hashing import hashing
-from model_signing.manifest import manifest
-from model_signing.signing import as_bytes
-from model_signing.signing import in_toto
-from model_signing.signing import signing
+from ..hashing import hashing
+from ..manifest import manifest
+from . import as_bytes
+from . import in_toto
+from . import signing
 
 
 if sys.version_info >= (3, 11):

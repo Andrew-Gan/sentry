@@ -23,10 +23,11 @@ from typing import cast
 
 from typing_extensions import override
 
-from model_signing.hashing import state
-from model_signing.hashing import hashing
-from model_signing.manifest import manifest
-from model_signing.serialization import serialization
+from ..hashing import state
+from ..hashing import hashing
+from ..manifest import manifest
+from . import serialization
+import time
 
 
 def _build_header(*, entry_name: str) -> bytes:
@@ -83,6 +84,7 @@ class StateSerializer(serialization.Serializer):
     def serialize(
         self,
         state: collections.OrderedDict,
+        ignore_paths = None,
     ) -> manifest.Manifest:
         """Serializes the model given by the `model_path` argument.
 
@@ -96,10 +98,14 @@ class StateSerializer(serialization.Serializer):
             ValueError: The model contains a symbolic link, but the serializer
               was not initialized with `allow_symlinks=True`.
         """
+        t0 = time.monotonic()
+
         digest = self._compute_hash(('state_dict', state))
         manifest_items = [digest]
 
-        return self._build_manifest(manifest_items)
+        runtime = time.monotonic() - t0
+
+        return self._build_manifest(manifest_items), runtime
 
     def _compute_hash(
         self, state: tuple[str, collections.OrderedDict]
@@ -136,6 +142,7 @@ class ManifestSerializer(StateSerializer):
     def serialize(
         self,
         states: list[collections.OrderedDict],
+        ignore_paths = None,
     ) -> manifest.StateLevelManifest:
         """Serializes the model given by the `state` argument.
 
@@ -212,7 +219,7 @@ class DigestSerializer(StateSerializer):
         self,
         model_path: collections.OrderedDict,
         *,
-        ignore_paths: Iterable[collections.OrderedDict] = frozenset(),
+        ignore_paths = None,
     ) -> manifest.DigestManifest:
         """Serializes the model given by the `model_path` argument.
 

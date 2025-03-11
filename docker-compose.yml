@@ -6,6 +6,7 @@ services:
     container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
+      - /share/sign-ml/dataset/cifar-10-batches-py:/home/cifar-10-batches-py
     deploy:
       resources:
         limits:

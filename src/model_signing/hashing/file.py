@@ -53,7 +53,7 @@ from typing import BinaryIO
 
 from typing_extensions import override
 
-from model_signing.hashing import hashing
+from . import hashing
 
 
 class FileHasher(hashing.HashEngine):

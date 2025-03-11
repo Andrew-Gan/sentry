@@ -24,10 +24,11 @@ from typing import cast
 
 from typing_extensions import override
 
-from model_signing.hashing import file
-from model_signing.hashing import hashing
-from model_signing.manifest import manifest
-from model_signing.serialization import serialization
+from ..hashing import file
+from ..hashing import hashing
+from ..manifest import manifest
+from . import serialization
+import time
 
 
 def check_file_or_directory(
@@ -160,6 +161,8 @@ class FilesSerializer(serialization.Serializer):
             if path.is_file() and not _ignored(path, ignore_paths):
                 paths.append(path)
 
+        t0 = time.monotonic()
+
         manifest_items = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_workers
@@ -171,7 +174,9 @@ class FilesSerializer(serialization.Serializer):
             for future in concurrent.futures.as_completed(futures):
                 manifest_items.append(future.result())
 
-        return self._build_manifest(manifest_items)
+        runtime = time.monotonic() - t0
+        
+        return self._build_manifest(manifest_items), runtime
 
     def _compute_hash(
         self, model_path: pathlib.Path, path: pathlib.Path

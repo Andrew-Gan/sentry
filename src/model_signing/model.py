@@ -48,13 +48,10 @@ def sign(
     Returns:
         The model's signature.
     """
-    if ignore_paths:
-        manifest = serializer.serialize(item, ignore_paths=ignore_paths)
-    else:
-        manifest = serializer.serialize(item)
+    manifest, runtime = serializer.serialize(item, ignore_paths=ignore_paths)
     payload = payload_generator(manifest)
     sig = signer.sign(payload)
-    return sig
+    return sig, runtime
 
 
 def verify(

@@ -22,7 +22,7 @@ import abc
 from collections.abc import Iterable
 import pathlib
 
-from model_signing.manifest import manifest
+from ..manifest import manifest
 
 
 class Serializer(metaclass=abc.ABCMeta):
