@@ -10,21 +10,12 @@ import cupy as cp
 
 from src.sign import build_hasher, sign, HashType, Topology, InputType
 
+SAMPLE_SIZE = 16
+
 # To run with different data, see documentation of nvidia.dali.fn.readers.file
 # points to https://github.com/NVIDIA/DALI_extra
 data_file = os.path.join('cifar-10-batches-py', 'data')
 labels_file = os.path.join('cifar-10-batches-py', 'labels')
-
-def loss_func(pred, y):
-    pass
-
-
-def model(x):
-    pass
-
-
-def backward(loss, model):
-    pass
 
 hasher = build_hasher(HashType.LATTICE, Topology.ADD)
 
@@ -32,14 +23,12 @@ def lattice_hash(x):
     total = cp.empty(shape=((len(x),) + x[0].shape), dtype=np.uint8)
     for i, v in enumerate(x):
         total[i] = v
-    x = hasher.update({'dataset': total}, blockSize=x[0].nbytes)
+    hasher.update({'dataset': total}, blockSize=x[0].nbytes)
 
 @pipeline_def(num_threads=8, device_id=0)
-def get_dali_pipeline(device='cpu', gpu_direct=False, sign_dataset=False):
+def get_dali_pipeline(device='gpu', gpu_direct=False):
     # read from file system
     if gpu_direct:
-        if device=='cpu':
-            raise RuntimeError('Cannot use DALI on CPU with GPUDirect')
         images = fn.readers.numpy(file_root=data_file, random_shuffle=True,
             device='gpu', name='Reader', seed=0)
         labels = fn.readers.numpy(file_root=labels_file, random_shuffle=True,
@@ -54,10 +43,8 @@ def get_dali_pipeline(device='cpu', gpu_direct=False, sign_dataset=False):
 
     if device == 'gpu':
         images = fn.copy(images, device='gpu')
-    
-    # # entrypoint into hashing lib
-    if sign_dataset and device == 'gpu':
-        fn.python_function(images, batch_processing=True, function=lattice_hash, num_outputs=0)
+        fn.python_function(images, batch_processing=True,
+            function=lattice_hash, num_outputs=0)
 
     images = fn.random_resized_crop(images, size=[256, 256], device=device)
     images = fn.crop_mirror_normalize(
@@ -67,40 +54,35 @@ def get_dali_pipeline(device='cpu', gpu_direct=False, sign_dataset=False):
         mean=[0.485 * 255, 0.456 * 255, 0.406 * 255],
         std=[0.229 * 255, 0.224 * 255, 0.225 * 255],
         mirror=fn.random.coin_flip(), device=device)
+
     return images, labels
 
 model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
 model = model.cuda()
 
-for device in ['gpu']:
-    for sign_dataset in [False, True]:
+for batch in [32, 64, 128, 256, 512]:
+    for device in ['cpu', 'gpu']:
         dali_loader = DALIGenericIterator(
             [get_dali_pipeline(
-                batch_size=128,
+                batch_size=batch,
                 device=device,
-                gpu_direct=False,
-                sign_dataset=sign_dataset)],
+                gpu_direct=False)],
             ['data', 'label'],
             reader_name='Reader'
         )
 
         t0 = time.monotonic()
 
-        if sign_dataset and device=='cpu':
-            sign(data_file, HashType.SHA256, Topology.SEQUENTIAL, InputType.FILES)
+        for _ in range(SAMPLE_SIZE):
+            if device=='cpu':
+                sign(data_file, HashType.SHA256, Topology.SEQUENTIAL, InputType.FILES)
 
-        for i, data in enumerate(dali_loader):
-            x, y = data[0]['data'], data[0]['label']
-            x = x.cuda()
+            for i, data in enumerate(dali_loader):
+                x, y = data[0]['data'], data[0]['label']
+                x = x.cuda()
+                pred = model(x)
 
+        torch.cuda.synchronize()
         t1 = time.monotonic()
 
-        for i, data in enumerate(dali_loader):
-            x, y = data[0]['data'], data[0]['label']
-            x = x.cuda()
-            pred = model(x)
-            loss = loss_func(pred, y)
-            backward(loss, model)
-
-        print(f'DALI loader on {device}, Sign: {sign_dataset}')
-        print(f'Sign+Dataloader: {(t1-t0)*1000:.2f}, +Training: {(time.monotonic()-t0)*1000:.2f} ms')
+        print(f'Batch: {batch}, DALI: {device}, Runtime: {(t1-t0)*1000/SAMPLE_SIZE:.2f} ms')

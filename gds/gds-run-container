@@ -54,23 +54,24 @@ if [ "x$MOFED" = "x1" ]; then
 fi
 
 if [ "x$GDS" = "x1" ] ; then
-	nvfs_devs=$(ls /dev/nvidia-fs* 2>&1)
-	if [ $? -eq 0 ] ; then
+	# nvfs_devs=$(ls /dev/nvidia-fs* 2>&1)
+	# if [ $? -eq 0 ] ; then
 		NVFS_DEPS=" --ipc host  --volume /run/udev:/run/udev:ro "
 		for dev in ${nvfs_devs}
 		do
 			NVFS_DEVS="${NVFS_DEVS} --device=$dev"
 		done
-	else
-		echo "skipping nvidia_fs kernel module load"
-		exit
-	fi
+	# else
+		# echo "skipping nvidia_fs kernel module load"
+		# exit
+	# fi
 	GDS_OPTS="${NVFS_DEPS} ${NVFS_DEVS}"
 elif [ "x$GDS_COMPAT" = "x1" ] ; then
 	NVFS_DEPS=" --ipc host  --volume /run/udev:/run/udev:ro "
 	GDS_OPTS="${NVFS_DEPS}"
 fi
 
+echo "hi"
 
 if [ "$CMD" = "run" ] ;then
 	echo exec docker " run ${GDS_OPTS} ${MOFED_OPTS} ${DOCKER_OPTIONS}"

@@ -407,6 +407,7 @@ class AddGPU(hashing.StreamingHashEngine):
                 grid = (nThread + (block-1)) // block
                 args = [oData, iData]
                 args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+        
                 checkCudaErrors(driver.cuLaunchKernel(
                     self.adder, grid, 1, 1, block, 1, 1, block * self.digestSize,
                     stream, args.ctypes.data, 0,
@@ -447,7 +448,7 @@ class AddGPU(hashing.StreamingHashEngine):
     @property
     @override
     def digest_name(self) -> str:
-        return "MerkleGPU"
+        return "AddGPU"
 
     @property
     @override

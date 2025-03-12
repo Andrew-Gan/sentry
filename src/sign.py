@@ -301,6 +301,9 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
 
     for _ in range(SAMPLE_SIZE):
         if inputType == InputType.FILES:
+            if hashType == HashType.LATTICE:
+                raise RuntimeError('Lattice Hashing not supported for CPU file hashing')
+
             def hasher_factory(item) -> hashing.HashEngine:
                 return file.SimpleFileHasher(
                     file=item, content_hasher=hashType.value[2]())
@@ -355,10 +358,10 @@ if __name__ == "__main__":
             net = torch.hub.load(m[0], m[1], m[2])
 
         print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
-        # t0 = time.monotonic()
-        # torch.save(net, PATH)
-        # t1 = time.monotonic()
-        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        t0 = time.monotonic()
+        torch.save(net, PATH)
+        t1 = time.monotonic()
+        print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
         # t0 = time.monotonic()
         # torch.load(PATH, weights_only=False)
@@ -366,20 +369,17 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for hashType in HashType:
-        #     print(f'CPU Hashing from file using {algo}')
-        #     if algo == 'sha256':
-        #         sign(PATH, memory.SHA256(), InputType.FILES)
-        #     elif algo == 'blake2b':
-        #         sign(PATH, memory.BLAKE2(), InputType.FILES)
+            # print(f'CPU Hashing from file using {hashType.name}')
+            # sign(PATH, hashType, Topology.SEQUENTIAL, InputType.FILES)
 
-        #     print(f'SeqGPU-{hashType.name}')
-        #     sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
+            # print(f'SeqGPU-{hashType.name}')
+            # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
 
             print(f'MerkleGPU-{hashType.name}')
             sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
         # unsupported for v0
-        print(f'AddGPU-lattice')
-        sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
+        # print(f'AddGPU-lattice')
+        # sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
         
         del net
