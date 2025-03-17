@@ -3,10 +3,19 @@ services:
     build:
       dockerfile: sentry.dockerfile
     image: sentry:latest
+    # ipc: "host"
+    # network_mode: "host"
+    # cap_add:
+    #   - IPC_LOCK
+    # devices:
+      # - "/dev/infiniband/rdma_cm"
+      # - "/dev/infiniband/uverbs*"
+      # - "/dev/nvidia-fs*"
     container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
-      - /share/sign-ml/dataset/DALI_extra:/home/DALI_extra
+      - /share/sign-ml/dataset/cifar-10-batches-py:/home/cifar-10-batches-py
+      # - /run/udev:/run/udev:ro
     deploy:
       resources:
         limits:

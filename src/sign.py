@@ -20,36 +20,20 @@ import logging
 import pathlib
 import collections
 
-if __name__ == "__main__":
-    from model_signing import model
-    from model_signing.hashing import hashing
-    from model_signing.hashing import file
-    from model_signing.hashing import state
-    from model_signing.hashing import memory
-    from model_signing.serialization import serialize_by_file
-    from model_signing.serialization import serialize_by_state
-    from model_signing.signature import fake
-    from model_signing.signature import key
-    from model_signing.signature import pki
-    from model_signing.signing import in_toto
-    from model_signing.signing import in_toto_signature
-    from model_signing.signing import signing
-    from model_signing.signing import sigstore
-else:
-    from .model_signing import model
-    from .model_signing.hashing import hashing
-    from .model_signing.hashing import file
-    from .model_signing.hashing import state
-    from .model_signing.hashing import memory
-    from .model_signing.serialization import serialize_by_file
-    from .model_signing.serialization import serialize_by_state
-    from .model_signing.signature import fake
-    from .model_signing.signature import key
-    from .model_signing.signature import pki
-    from .model_signing.signing import in_toto
-    from .model_signing.signing import in_toto_signature
-    from .model_signing.signing import signing
-    from .model_signing.signing import sigstore
+from .model_signing import model
+from .model_signing.hashing import hashing
+from .model_signing.hashing import file
+from .model_signing.hashing import state
+from .model_signing.hashing import memory
+from .model_signing.serialization import serialize_by_file
+from .model_signing.serialization import serialize_by_state
+from .model_signing.signature import fake
+from .model_signing.signature import key
+from .model_signing.signature import pki
+from .model_signing.signing import in_toto
+from .model_signing.signing import in_toto_signature
+from .model_signing.signing import signing
+from .model_signing.signing import sigstore
 
 import torch
 import time
@@ -59,13 +43,17 @@ from enum import Enum
 import os
 
 log = logging.getLogger(__name__)
-SAMPLE_SIZE = 8
+
+if __name__ == "__main__":
+    SAMPLE_SIZE = 8
+else: # imported into another file
+    SAMPLE_SIZE = 1
 
 
 class HashType(Enum):
-    SHA256  = ('sha256', 32)
-    BLAKE2B = ('blake2b', 64)
-    SHA3    = ('sha3', 64)
+    SHA256  = ('sha256', 32, memory.SHA256)
+    BLAKE2B = ('blake2b', 64, memory.BLAKE2)
+    SHA3    = ('sha3', 64, memory.SHA3)
     LATTICE = ('ltHash', 64)
 
 class Topology(Enum):
@@ -74,8 +62,8 @@ class Topology(Enum):
     ADD = 3
 
 class InputType(Enum):
-    FILE = 1
-    GPU = 2
+    FILES = 1
+    MODEL = 2
 
 
 def _cudaGetErrorEnum(error):
@@ -90,7 +78,8 @@ def _cudaGetErrorEnum(error):
 
 def checkCudaErrors(result):
     if result[0].value:
-        raise RuntimeError("CUDA error code={}({})".format(result[0].value, _cudaGetErrorEnum(result[0])))
+        raise RuntimeError("CUDA error code={}({})".format(result[0].value,
+            _cudaGetErrorEnum(result[0])))
     if len(result) == 1:
         return None
     elif len(result) == 2:
@@ -238,10 +227,14 @@ def _check_pki_options(args: argparse.Namespace):
 
 def compile(algo, prefixes):
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
-    ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
+    ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     # get device arch
-    major = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, cuDevice))
-    minor = checkCudaErrors(driver.cuDeviceGetAttribute(driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, cuDevice))
+    major = checkCudaErrors(driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
+        cuDevice))
+    minor = checkCudaErrors(driver.cuDeviceGetAttribute(
+        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
+        cuDevice))
     arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
 
     currPath = os.path.dirname(os.path.abspath(__file__))
@@ -252,7 +245,8 @@ def compile(algo, prefixes):
     with open(srcPath, 'r') as f:
         code = f.read()
     # parse cuda code from file
-    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), bytes(f'{algo}.cuh', 'utf-8'), 0, [], []))
+    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), 
+        bytes(f'{algo}.cuh', 'utf-8'), 0, [], []))
     
     # compile code into program and extract ptx
     err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
@@ -271,48 +265,14 @@ def compile(algo, prefixes):
     module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
     funcs = []
     for p in prefixes:
-        funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module, bytes(f'{p}{algo}', 'utf-8'))))
+        funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module,
+            bytes(f'{p}{algo}', 'utf-8'))))
     return ctx, funcs
 
-def sign_cpu(path, hashType: HashType):
-    logging.basicConfig(level=logging.INFO)
-    args = _arguments()
-
-    payload_signer = _get_payload_signer(args)
-
-    if hashType == HashType.SHA256:
-        def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
-            return file.SimpleFileHasher(
-                file=file_path, content_hasher=memory.SHA256()
-            )
-
-    elif hashType == HashType.BLAKE2B:
-        def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
-            return file.SimpleFileHasher(
-                file=file_path, content_hasher=memory.BLAKE2()
-            )
-
-    serializer = serialize_by_file.ManifestSerializer(
-        file_hasher_factory=hasher_factory
-    )
-
-    sig = model.sign(
-        item=pathlib.Path(path),
-        signer=payload_signer,
-        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-        serializer=serializer,
-        ignore_paths=[args.sig_out],
-    )
-
-    sig.write(args.sig_out)
-
-def sign_gpu(item, hashType: HashType, topology : Topology, inputType : InputType):
+def build_hasher(hashType: HashType, topology : Topology):
     # lattice can be further parallelised during reduction step
-    rF = 1
-    if hashType == HashType.LATTICE:
-        rF = 8
+    rF = 8 if hashType == HashType.LATTICE else 1
 
-    # early compilation of cuda modules
     if topology == Topology.SEQUENTIAL:
         ctx, [seq] = compile(hashType.value[0], ['seq_'])
         hasher = memory.SeqGPU(seq, ctx, hashType.value[1])
@@ -327,46 +287,57 @@ def sign_gpu(item, hashType: HashType, topology : Topology, inputType : InputTyp
         ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
         hasher = memory.AddGPU(hashB, reduce, ctx, hashType.value[1], rF)
 
+    return hasher
+
+def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
+    # early compilation of cuda modules
+    if inputType == InputType.MODEL:
+        hasher = build_hasher(hashType, topology)
+
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
     payload_signer = _get_payload_signer(args)
+    total_runtime = 0
 
     for _ in range(SAMPLE_SIZE):
-        if inputType == InputType.FILE:
+        if inputType == InputType.FILES:
+            if hashType == HashType.LATTICE:
+                raise RuntimeError('Lattice Hashing not supported for CPU file hashing')
+
             def hasher_factory(item) -> hashing.HashEngine:
-                return file.SimpleFileHasher(file=item, content_hasher=hasher)
+                return file.SimpleFileHasher(
+                    file=item, content_hasher=hashType.value[2]())
             serializer = serialize_by_file.ManifestSerializer(
                 file_hasher_factory=hasher_factory)
+            myitem = pathlib.Path(item)
 
-            sig = model.sign(
-                item=pathlib.Path(item),
-                signer=payload_signer,
-                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-                serializer=serializer,
-                ignore_paths=[args.sig_out],
-            )
-
-        elif inputType == InputType.GPU:
+        elif inputType == InputType.MODEL:
             def hasher_factory(item) -> hashing.HashEngine:
                 return state.SimpleStateHasher(state=item, content_hasher=hasher)
             serializer = serialize_by_state.ManifestSerializer(
                 state_hasher_factory=hasher_factory)
+            myitem = item.to('cuda').state_dict()
 
-            sig = model.sign(
-                item=item.to('cuda'),
-                signer=payload_signer,
-                payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-                serializer=serializer,
-            )
+        sig, runtime = model.sign(
+            item=myitem,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+            ignore_paths=[args.sig_out],
+        )
+
+        total_runtime += runtime
 
         # if digestPrev:
         #     assert(digestPrev == hasher.digest)
         # digestPrev = hasher.digest
 
-    print(f'Hash runtime: {1000*(hasher.runtime)/SAMPLE_SIZE:.2f} ms')
+    if __name__ == '__main__':
+        print(f'Hash runtime: {1000*(total_runtime)/SAMPLE_SIZE:.2f} ms')
 
     sig.write(args.sig_out)
-    return hasher.digest
+    # todo: find cpu hash location
+    # return hasher.digest
 
 
 if __name__ == "__main__":
@@ -378,7 +349,6 @@ if __name__ == "__main__":
         ('pytorch/vision:v0.10.0', 'vgg19'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
-        # ('huggingface/transformers', 'modelForCausalLM', 'Llama-2-7b-chat-hf'),
     ]
 
     for m in models:
@@ -388,10 +358,10 @@ if __name__ == "__main__":
             net = torch.hub.load(m[0], m[1], m[2])
 
         print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
-        # t0 = time.monotonic()
+        t0 = time.monotonic()
         torch.save(net, PATH)
-        # t1 = time.monotonic()
-        # print(f'Write to file: {1000*(t1-t0):.2f} ms')
+        t1 = time.monotonic()
+        print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
         # t0 = time.monotonic()
         # torch.load(PATH, weights_only=False)
@@ -399,20 +369,17 @@ if __name__ == "__main__":
         # print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
         for hashType in HashType:
-            # if hashType == HashType.SHA256 or hashType == HashType.BLAKE2B:
-            #     print(f'SeqCPU-{hashType.name}')
-            #     sign_cpu(PATH, hashType)
+            # print(f'CPU Hashing from file using {hashType.name}')
+            # sign(PATH, hashType, Topology.SEQUENTIAL, InputType.FILES)
 
             # print(f'SeqGPU-{hashType.name}')
-            # sign_cpu(net, hashType, Topology.SEQUENTIAL, InputType.FILE)
+            # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
 
             print(f'MerkleGPU-{hashType.name}')
-            net = net.to('cuda')
-            sign_gpu(net.state_dict(), hashType, Topology.MERKLE, InputType.GPU)
+            sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
         # unsupported for v0
-        # print(f'AddGPU-lattice')
-        # net = net.to('cuda')
-        # sign_gpu(net.state_dict(), HashType.LATTICE, Topology.ADD, InputType.GPU)
+        print(f'AddGPU-lattice')
+        sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
         
         del net

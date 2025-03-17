@@ -6,5 +6,8 @@
 __pycache__/
 dist/
 html/
-src/model.pth
-src/model.sig
+**/model.pth
+**/model.sig
+private.pem
+public.pem
+dataset

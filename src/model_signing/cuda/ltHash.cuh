@@ -68,14 +68,16 @@ size_t getChecksumSizeBytes(uint64_t N, uint64_t B) {
 }
 
 extern "C" __global__ 
-void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t block, uint64_t nThread) {
+void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i >= nThread) return;
+    uint8_t *myIn = in + i * blockSize;
+    if (myIn >= in + size) return;
+	uint8_t *myEnd = myIn + blockSize;
 
     BLAKE2XB_CTX ctx;
     uint64_t key = 0xfedcba9876543210UL;
     cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX, (uint8_t*)&key, sizeof(key));
-    cuda_blake2xb_update(&ctx, in + i * block, block);
+    cuda_blake2xb_update(&ctx, myIn, blockSize < myEnd - myIn ? blockSize : myEnd - myIn);
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
@@ -87,14 +89,15 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
     uint64_t *lhs = in + digestId;
     uint64_t *rhs = in + digestId + blockDim.x;
     add(*lhs, *rhs, sdata+tid);
-    __syncthreads();
 
-    for (uint64_t numThread = blockDim.x / 2; numThread > 32; numThread /= 2) {
-        if (tid < numThread)
+    uint64_t numThread = blockDim.x / 2;
+    for (; numThread > 32; numThread /= 2) {
+        if (tid < numThread) {
             add(sdata[tid], sdata[tid + numThread], sdata + tid);
+        }
         __syncthreads();
     }
-    for (int numThread = 32; numThread >= 8; numThread /= 2) {
+    for (; numThread >= 8; numThread /= 2) {
         if (tid < numThread)
             add(sdata[tid], sdata[tid + numThread], sdata + tid);
     }
@@ -104,6 +107,14 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
         *(out + blockOffsetU64 + tid) = sdata[tid];
     }
 }
+
+// __device__
+// void ltHash_sub_warp(uint64_t B, uint64_t *sdata, uint64_t tid) {
+//     for (int numThread = 32; numThread >= 8; numThread /= 2) {
+//         if (tid < numThread)
+//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
+//     }
+// }
 
 // extern "C" __global__
 // void ltHash_sub(uint64_t B, uint64_t *dataIO) {
@@ -120,10 +131,7 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
 //         }
 //         __syncthreads();
 //     }
-//     for (int numThread = 32; numThread >= 8; numThread /= 2) {
-//         if (tid < numThread)
-//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
-//     }
+//     if (tid < 32) ltHash_sub_warp(B, sdata, tid);
 //     if (tid == 0) memcpy(lhs, sdata, BLAKE2B_BYTES_MAX);
 // }
 

@@ -28,7 +28,6 @@ from ..hashing import file
 from ..hashing import hashing
 from ..manifest import manifest
 from . import serialization
-
 import time
 
 
@@ -174,10 +173,10 @@ class FilesSerializer(serialization.Serializer):
             ]
             for future in concurrent.futures.as_completed(futures):
                 manifest_items.append(future.result())
-        
-        print(f'{(time.monotonic() - t0) * 1000:.2f} ms')
 
-        return self._build_manifest(manifest_items)
+        runtime = time.monotonic() - t0
+        
+        return self._build_manifest(manifest_items), runtime
 
     def _compute_hash(
         self, model_path: pathlib.Path, path: pathlib.Path

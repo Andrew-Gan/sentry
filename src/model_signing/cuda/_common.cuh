@@ -15,9 +15,11 @@
 
 #define merkle_pre(init, update, final, outBytes) { \
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
-	if (idx < n) { \
+    uint8_t *myIn = in + idx * blockSize; \
+	uint8_t *myEnd = myIn + blockSize; \
+	if (myIn < in + size) { \
         init(&ctx); \
-        update(&ctx, in + idx * blockSize, blockSize); \
+        update(&ctx, myIn, blockSize < myEnd - myIn ? blockSize : myEnd - myIn); \
         final(&ctx, &out[idx * outBytes]); \
     } \
 } \
@@ -25,8 +27,8 @@
 #define merkle_step(init, update, final, outBytes) { \
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x; \
 	int locIdx = threadIdx.x; \
-    int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x)); \
-    memset(&shMem[locIdx*outBytes], 0, outBytes); \
+	int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x)); \
+	memset(&shMem[locIdx*outBytes], 0, outBytes); \
     if (locIdx < activeThreads) { \
         init(&ctx); \
 		update(&ctx, &in[(2*glbIdx)*outBytes], outBytes); \
@@ -36,16 +38,16 @@
     __syncthreads(); \
     activeThreads = (activeThreads + 1) / 2; \
     for (; activeThreads > 0; activeThreads /= 2) { \
-        if (locIdx < activeThreads) { \
-            update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
-            update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
-        } \
-        __syncthreads(); \
-        if (locIdx < activeThreads) \
+		if (locIdx < activeThreads) { \
+			update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
+			update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
+		} \
+		__syncthreads(); \
+		if (locIdx < activeThreads) \
             final(&ctx, &shMem[locIdx*outBytes]); \
         __syncthreads(); \
         if (activeThreads > 1 && activeThreads & 0b1 == 1) activeThreads++; \
-    } \
+	} \
     if (locIdx == 0) { \
         memcpy(out + blockIdx.x*outBytes, shMem, outBytes); \
     } \
