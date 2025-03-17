@@ -8,3 +8,6 @@ dist/
 html/
 src/model.pth
 src/model.sig
+private.pem
+public.pem
+dataset

@@ -379,7 +379,7 @@ if __name__ == "__main__":
             sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
         # unsupported for v0
-        # print(f'AddGPU-lattice')
-        # sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
+        print(f'AddGPU-lattice')
+        sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
         
         del net

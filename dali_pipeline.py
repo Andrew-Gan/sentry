@@ -14,8 +14,8 @@ SAMPLE_SIZE = 16
 
 # To run with different data, see documentation of nvidia.dali.fn.readers.file
 # points to https://github.com/NVIDIA/DALI_extra
-data_file = os.path.join('cifar-10-batches-py', 'data')
-labels_file = os.path.join('cifar-10-batches-py', 'labels')
+data_file = os.path.join('dataset', 'data')
+labels_file = os.path.join('dataset', 'labels')
 
 hasher = build_hasher(HashType.LATTICE, Topology.ADD)
 
@@ -58,31 +58,39 @@ def get_dali_pipeline(device='gpu', gpu_direct=False):
     return images, labels
 
 model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
+model_path = './model.pth'
+torch.save(model, model_path)
 model = model.cuda()
 
 for batch in [32, 64, 128, 256, 512]:
-    for device in ['cpu', 'gpu']:
-        dali_loader = DALIGenericIterator(
-            [get_dali_pipeline(
-                batch_size=batch,
-                device=device,
-                gpu_direct=False)],
-            ['data', 'label'],
-            reader_name='Reader'
-        )
+    for device in ['gpu']: #['cpu', 'gpu']:
+        for gpu_direct in [False, True]:
+            if device == 'cpu' and gpu_direct:
+                continue
+            dali_loader = DALIGenericIterator(
+                [get_dali_pipeline(
+                    batch_size=batch,
+                    device=device,
+                    gpu_direct=gpu_direct)],
+                ['data', 'label'],
+                reader_name='Reader'
+            )
 
-        t0 = time.monotonic()
+            t0 = time.monotonic()
 
-        for _ in range(SAMPLE_SIZE):
-            if device=='cpu':
-                sign(data_file, HashType.SHA256, Topology.SEQUENTIAL, InputType.FILES)
+            for _ in range(SAMPLE_SIZE):
+                if device=='cpu':
+                    sign(data_file, HashType.SHA256, Topology.SEQUENTIAL, InputType.FILES)
+                    sign(model_path, HashType.SHA256, Topology.SEQUENTIAL, InputType.FILES)
+                else:
+                    sign(model, HashType.SHA256, Topology.MERKLE, InputType.MODEL)
 
-            for i, data in enumerate(dali_loader):
-                x, y = data[0]['data'], data[0]['label']
-                x = x.cuda()
-                pred = model(x)
+                for i, data in enumerate(dali_loader):
+                    x, y = data[0]['data'], data[0]['label']
+                    x = x.cuda()
+                    pred = model(x)
 
-        torch.cuda.synchronize()
-        t1 = time.monotonic()
+            torch.cuda.synchronize()
+            t1 = time.monotonic()
 
-        print(f'Batch: {batch}, DALI: {device}, Runtime: {(t1-t0)*1000/SAMPLE_SIZE:.2f} ms')
+            print(f'Batch: {batch}, DALI: {device}, GDS: {gpu_direct}, Runtime: {(t1-t0)*1000/SAMPLE_SIZE:.2f} ms')

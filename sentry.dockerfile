@@ -1,9 +1,9 @@
 FROM pytorch/pytorch:2.6.0-cuda12.6-cudnn9-devel
-RUN apt update && apt install -y python3-pip nvidia-cuda-toolkit
+RUN apt update && apt install -y python3-pip
 RUN pip install --break-system-packages typing_extensions protobuf \
-    sigstore sigstore_protobuf_specs cuda-python in_toto_attestation \
+    sigstore sigstore_protobuf_specs in_toto_attestation \
     cryptography certifi pyopenssl huggingface_hub transformers sentencepiece \
-    sacremoses torch nvidia-dali-cuda120 pillow cupy
+    sacremoses torch cuda-python nvidia-dali-cuda120 pillow cupy
 
 ENV TORCH_HOME=/home/torch
 ENV DALI_EXTRA_PATH="/home/DALI_extra"
