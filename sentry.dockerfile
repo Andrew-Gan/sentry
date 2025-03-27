@@ -6,11 +6,10 @@ RUN pip install --break-system-packages typing_extensions protobuf \
     sacremoses torch cuda-python nvidia-dali-cuda120 pillow cupy
 
 ENV TORCH_HOME=/home/torch
-ENV DALI_EXTRA_PATH="/home/DALI_extra"
-ENV DALI_GDS_CHUNK_SIZE=4096
 
 COPY dali_pipeline.py /home/
 COPY src /home/src
+COPY FRL /home/FRL
 
 WORKDIR /home
 RUN openssl ecparam -name prime256v1 -genkey -noout -out private.pem

@@ -289,9 +289,9 @@ def build_hasher(hashType: HashType, topology : Topology):
 
     return hasher
 
-def sign(item, hashType: HashType, topology : Topology, inputType : InputType):
+def sign(item, hashType: HashType, topology : Topology, inputType : InputType, hasher = None):
     # early compilation of cuda modules
-    if inputType == InputType.MODEL:
+    if not hasher and inputType == InputType.MODEL:
         hasher = build_hasher(hashType, topology)
 
     logging.basicConfig(level=logging.INFO)

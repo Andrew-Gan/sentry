@@ -43,8 +43,9 @@ from . import hashing
 
 from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
-import cupy as cp
 import collections
+import torch
+import cupy as cp
 
 
 def _cudaGetErrorEnum(error):
@@ -343,13 +344,16 @@ class AddGPU(hashing.StreamingHashEngine):
         self.allocatedSpace = 1
         self.iDataFull = checkCudaErrors(runtime.cudaMalloc(1))
         self.oDataFull = checkCudaErrors(runtime.cudaMalloc(1))
-        digestSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-        self.digestSum = (digestSum, np.array([digestSum], dtype=np.uint64))
+        self.separatedSum = {}
+        totalSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+        self.totalSum = (totalSum, np.array([totalSum], dtype=np.uint64))
     
     def __del__(self):
         checkCudaErrors(runtime.cudaFree(self.iDataFull))
         checkCudaErrors(runtime.cudaFree(self.oDataFull))
-        checkCudaErrors(runtime.cudaFree(self.digestSum[0]))
+        for s in self.separatedSum:
+            checkCudaErrors(runtime.cudaFree(s[0]))
+        checkCudaErrors(runtime.cudaFree(self.totalSum[0]))
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
@@ -358,17 +362,21 @@ class AddGPU(hashing.StreamingHashEngine):
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
-        if 'dataset' in data:
-            sortedLayers = sorted(
-                [(v.data.ptr, v.nbytes) for v in data.values()], 
-                key=lambda x: x[1]
-            )
-        else:
-            sortedLayers = sorted(
-                [(v.data_ptr(), v.nbytes) for v in data.values()], 
-                key=lambda x: x[1]
-            )
-        totalBlocks = sum((size + (blockSize-1)) // blockSize for _, size in sortedLayers)
+        unsortedLayers = []
+        totalBlocks = 0
+        for k, v in data.items():
+            # register new hash category in dictionary
+            if k not in self.separatedSum:
+                s = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+                self.separatedSum[k] = (s, np.array([s], dtype=np.uint64))
+            # handle state dictionary where params are torch tensor
+            if torch.is_tensor(v):
+                unsortedLayers.append((k, v.data_ptr(), v.nbytes))
+            # handle data batch where samples are cupy ndarray
+            elif isinstance(v, cp.ndarray):
+                unsortedLayers.append((k, v.data.ptr, v.nbytes))
+            sortedLayers = sorted(unsortedLayers, key=lambda x: x[2])
+            totalBlocks += (v.nbytes + blockSize - 1) // blockSize
         
         spaceToAlloc = totalBlocks*self.digestSize
         if self.allocatedSpace < spaceToAlloc:
@@ -377,10 +385,10 @@ class AddGPU(hashing.StreamingHashEngine):
             self.iDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
             self.oDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
             self.allocatedSpace = spaceToAlloc
-        digestResidence = [True] * len(data.values()) # True: iData, False: oData
+        outputStored = [True] * len(data.values()) # True: iData, False: oData
         currBytes = 0
 
-        for i, (stream, (value, size)) in enumerate(zip(streams, sortedLayers)):
+        for i, (stream, (_, value, size)) in enumerate(zip(streams, sortedLayers)):
             sizeA = np.array([size], dtype=np.uint64)
             nBlock = (size + (blockSize-1)) // blockSize
             tensor = np.array([value], dtype=np.uint64)
@@ -397,7 +405,7 @@ class AddGPU(hashing.StreamingHashEngine):
                 self.hashblock, grid, 1, 1, block, 1, 1, 0, stream,
                 args.ctypes.data, 0,
             ))
-            digestResidence[i] = not digestResidence[i]
+            outputStored[i] = not outputStored[i]
 
             while nBlock > 1:
                 iData, oData = oData, iData
@@ -413,29 +421,35 @@ class AddGPU(hashing.StreamingHashEngine):
                     stream, args.ctypes.data, 0,
                 ))
                 nBlock = grid
-                digestResidence[i] = not digestResidence[i]
+                outputStored[i] = not outputStored[i]
             currBytes += nBlock * self.digestSize
         
         currBytes = 0
-        for i, (stream, (_, size)) in enumerate(zip(streams, sortedLayers)):
+        for i, (stream, (key, _, size)) in enumerate(zip(streams, sortedLayers)):
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-            if digestResidence[i]:
-                digestData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
-            else:
-                digestData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
-            args = [self.digestSum[1], digestData]
+            base = self.iDataFull if outputStored[i] else self.oDataFull
+            digestData = np.array([base + currBytes], dtype=np.uint64)
+
+            # add layer hash to layer sum
+            args = [self.separatedSum[key][1], digestData]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
+
+            # add layer hash to total sum
+            args = [self.totalSum[1], digestData]
+            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+            checkCudaErrors(driver.cuLaunchKernel(
+                self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
+                stream, args.ctypes.data, 0,
+            ))
+
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
             checkCudaErrors(runtime.cudaStreamDestroy(stream))
             nBlock = (size + (blockSize-1)) // blockSize
             currBytes += nBlock * self.digestSize
-        
-        checkCudaErrors(runtime.cudaMemcpy(self.digest, self.digestSum[0],
-            self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
 
     @override
     def reset(self, data: bytes = b"") -> None:

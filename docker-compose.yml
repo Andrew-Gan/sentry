@@ -14,7 +14,7 @@ services:
     container_name: sentry
     volumes:
       - /share/sign-ml/torch:/home/torch
-      - /share/sign-ml/dataset/cifar-10-batches-py:/home/cifar-10-batches-py
+      - /share/sign-ml/dataset:/home/dataset
       # - /run/udev:/run/udev:ro
     deploy:
       resources:
