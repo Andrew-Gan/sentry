@@ -59,11 +59,15 @@ class HashType(Enum):
 class Topology(Enum):
     SEQUENTIAL = 1
     MERKLE = 2
-    ADD = 3
+    HOMOMORPHIC = 3
 
 class InputType(Enum):
-    FILES = 1
+    """
+    FILE mode uses Hashlib/Sigstore, MODEL or DATASET mode uses Sentry
+    """
+    FILE = 1
     MODEL = 2
+    DATASET = 3
 
 
 def _cudaGetErrorEnum(error):
@@ -228,6 +232,8 @@ def _check_pki_options(args: argparse.Namespace):
 def compile(algo, prefixes):
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
+    if repr(ctx) == '<CUcontext 0x0>':
+        ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
     # get device arch
     major = checkCudaErrors(driver.cuDeviceGetAttribute(
         driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
@@ -269,7 +275,7 @@ def compile(algo, prefixes):
             bytes(f'{p}{algo}', 'utf-8'))))
     return ctx, funcs
 
-def build_hasher(hashType: HashType, topology : Topology):
+def build_hasher(hashType: HashType, topology : Topology, inputType : InputType):
     # lattice can be further parallelised during reduction step
     rF = 8 if hashType == HashType.LATTICE else 1
 
@@ -281,18 +287,26 @@ def build_hasher(hashType: HashType, topology : Topology):
         ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
         hasher = memory.MerkleGPU(hashB, reduce, ctx, hashType.value[1], rF)
 
-    elif topology == Topology.ADD:
+    elif topology == Topology.HOMOMORPHIC:
         if hashType != HashType.LATTICE:
             raise RuntimeError('Hash addition must use Lattice Hashing')
-        ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
-        hasher = memory.AddGPU(hashB, reduce, ctx, hashType.value[1], rF)
+
+        if inputType == InputType.MODEL:
+            ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_', 'reduce_'])
+            hasher = memory.HomomorphicGPU(hashB, reduce, ctx, hashType.value[1], rF)
+        elif inputType == InputType.DATASET:
+            ctx, [hashB, reduce] = compile(hashType.value[0], ['hash_dataset_', 'reduce_'])
+            hasher = memory.HomomorphicGPU(hashB, reduce, ctx, hashType.value[1], rF)
+
+    if not hasher:
+        raise RuntimeError('Failed to build hasher due to invalid arguments')
 
     return hasher
 
 def sign(item, hashType: HashType, topology : Topology, inputType : InputType, hasher = None):
     # early compilation of cuda modules
     if not hasher and inputType == InputType.MODEL:
-        hasher = build_hasher(hashType, topology)
+        hasher = build_hasher(hashType, topology, inputType)
 
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
@@ -300,7 +314,7 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType, h
     total_runtime = 0
 
     for _ in range(SAMPLE_SIZE):
-        if inputType == InputType.FILES:
+        if inputType == InputType.FILE:
             if hashType == HashType.LATTICE:
                 raise RuntimeError('Lattice Hashing not supported for CPU file hashing')
 
@@ -370,7 +384,7 @@ if __name__ == "__main__":
 
         for hashType in HashType:
             # print(f'CPU Hashing from file using {hashType.name}')
-            # sign(PATH, hashType, Topology.SEQUENTIAL, InputType.FILES)
+            # sign(PATH, hashType, Topology.SEQUENTIAL, InputType.FILE)
 
             # print(f'SeqGPU-{hashType.name}')
             # sign(net, hashType, Topology.SEQUENTIAL, InputType.MODEL)
@@ -379,7 +393,7 @@ if __name__ == "__main__":
             sign(net, hashType, Topology.MERKLE, InputType.MODEL)
 
         # unsupported for v0
-        print(f'AddGPU-lattice')
-        sign(net, HashType.LATTICE, Topology.ADD, InputType.MODEL)
+        print(f'HomomorphicGPU-lattice')
+        sign(net, HashType.LATTICE, Topology.HOMOMORPHIC, InputType.MODEL)
         
         del net

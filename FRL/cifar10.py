@@ -3,6 +3,7 @@ from collections import defaultdict
 import os
 import random
 import numpy as np
+import pickle
 
 def sample_dirichlet_train_data_train(train_dataset, num_participants, alpha, force=False):
     tr_classes = {}
@@ -34,16 +35,34 @@ def sample_dirichlet_train_data_train(train_dataset, num_participants, alpha, fo
 
     return tr_per_participant_list, tr_per_participant_list_labels_fr
 
-def generate_signatures(labelPath, num_participants, alpha, sigPath):
-    datasetSize = len(os.listdir(labelPath))
+def process_cifar10_data(path):
+    index = 0
     labels = []
-    for idx in range(1, 1+datasetSize):
-        npdata = np.load(os.path.join(labelPath, f'label_{idx}.npy'))
-        labels.append(int(npdata))
+    dataPath = os.path.join(path, 'data')
+    os.makedirs(dataPath, exist_ok=True)
 
+    for i in range(1, 6):
+        train_file = os.path.join(path, 'cifar-10-batches-py', 'data_batch_' + f'{i}')
+        with open(train_file, 'rb') as f:
+            train_dict = pickle.load(f, encoding='bytes')
+            for data, label in zip(train_dict[b'data'], train_dict[b'labels']):
+                data = np.transpose(np.reshape(data, (3, 32, 32)), (1, 2, 0))
+                np.save(os.path.join(path, f'data/data_{index}.npy'), data)
+                labels.append(label)
+                index += 1
+
+    return labels
+
+def process_cifar10_metadata(path, labels, num_participants, alpha):
+    metaPath = os.path.join(path, 'metadata')
+    os.makedirs(metaPath, exist_ok=True)
     trainerSamplesDict, _ = sample_dirichlet_train_data_train(labels, num_participants, alpha, force=False)
-
     for preparer, indices in trainerSamplesDict.items():
-        for index in indices:
-            path = os.path.join(sigPath, f'sig_{index}.npy')
-            np.save(path, [preparer])
+            for index in indices:
+                path = os.path.join(metaPath, f'metadata_{index}.npy')
+                np.save(path, [preparer, labels[index]])
+
+def prepare_cifar10(path, num_participants, alpha):
+    labels = process_cifar10_data(path)
+    process_cifar10_metadata(path, labels, num_participants, alpha)
+    

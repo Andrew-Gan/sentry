@@ -3,8 +3,7 @@ services:
     build:
       dockerfile: sentry.dockerfile
     image: sentry:latest
-    # ipc: "host"
-    # network_mode: "host"
+    network_mode: "host"
     # cap_add:
     #   - IPC_LOCK
     # devices:
@@ -23,5 +22,5 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['0']
+              device_ids: ['1']
               capabilities: [gpu]
