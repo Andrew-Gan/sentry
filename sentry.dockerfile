@@ -5,11 +5,13 @@ RUN pip install --break-system-packages typing_extensions protobuf \
     cryptography certifi pyopenssl huggingface_hub transformers sentencepiece \
     sacremoses torch cuda-python nvidia-dali-cuda120 pillow cupy
 
+RUN pip install datasets
+
 ENV TORCH_HOME=/home/torch
 
 COPY dali_pipeline.py /home/
 COPY src /home/src
-COPY FRL /home/FRL
+COPY dataset_formatter /home/dataset_formatter
 
 WORKDIR /home
 RUN openssl ecparam -name prime256v1 -genkey -noout -out private.pem
