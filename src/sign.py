@@ -18,7 +18,6 @@ import sys
 import argparse
 import logging
 import pathlib
-import collections
 
 from .model_signing import model
 from .model_signing.hashing import hashing

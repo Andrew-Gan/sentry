@@ -3,9 +3,7 @@ RUN apt update && apt install -y python3-pip
 RUN pip install --break-system-packages typing_extensions protobuf \
     sigstore sigstore_protobuf_specs in_toto_attestation \
     cryptography certifi pyopenssl huggingface_hub transformers sentencepiece \
-    sacremoses torch cuda-python nvidia-dali-cuda120 pillow cupy
-
-RUN pip install datasets
+    sacremoses torch cuda-python nvidia-dali-cuda120 pillow cupy datasets
 
 ENV TORCH_HOME=/home/torch
 

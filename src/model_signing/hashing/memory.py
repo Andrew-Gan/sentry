@@ -348,12 +348,12 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         totalSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         self.totalSum = (totalSum, np.array([totalSum], dtype=np.uint64))
     
-    def __del__(self):
-        checkCudaErrors(runtime.cudaFree(self.iDataFull))
-        checkCudaErrors(runtime.cudaFree(self.oDataFull))
-        for s in self.separatedSum:
-            checkCudaErrors(runtime.cudaFree(s[0]))
-        checkCudaErrors(runtime.cudaFree(self.totalSum[0]))
+    # def __del__(self):
+    #     checkCudaErrors(runtime.cudaFree(self.iDataFull))
+    #     checkCudaErrors(runtime.cudaFree(self.oDataFull))
+    #     for s in self.separatedSum:
+    #         checkCudaErrors(runtime.cudaFree(s[0]))
+    #     checkCudaErrors(runtime.cudaFree(self.totalSum[0]))
     
     def __str__(self):
         hashString = ''

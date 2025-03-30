@@ -6,21 +6,15 @@ import torch
 import os
 import time
 import src.sign as sign
-import dataset_formatter.cifar10 as cifar10
-import dataset_formatter.medicalqa as medicalqa
+import dataset_formatter.formatter as formatter
 import cupy as cp
 
-# TORCH HUB: load pretrained ML model and save to file
-model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
-modelPath = './model.pth'
-torch.save(model, modelPath)
-model = model.cuda()
-
 # SENTRY: precompile CUDA modules for Sentry operations
+torch.cuda.synchronize()
 dataHasher = sign.build_hasher(sign.HashType.LATTICE, sign.Topology.HOMOMORPHIC, sign.InputType.DATASET)
 modelHasher = sign.build_hasher(sign.HashType.SHA256, sign.Topology.MERKLE, sign.InputType.MODEL)
 
-def lattice_hash_images(data, metadata):
+def lattice_hash(data, metadata):
     partitions = {}
     for sample, (src, _) in zip(data, metadata):
         sample = cp.asarray(sample)
@@ -38,7 +32,7 @@ def get_dali_pipeline_images(dataPath, metaPath, device='gpu'):
 
     if device == 'gpu':
         fn.python_function(data, metadata, batch_processing=True,
-            function=lattice_hash_images, num_outputs=0, device='cpu')
+            function=lattice_hash, num_outputs=0, device='cpu')
         data = fn.copy(data, device='gpu')
 
     data = fn.random_resized_crop(data, size=[256, 256], device=device)
@@ -53,16 +47,6 @@ def get_dali_pipeline_images(dataPath, metaPath, device='gpu'):
 
     return data, metadata
 
-def lattice_hash_texts(data, metadata):
-    print(data)
-    partitions = {}
-    # for sample, (src, _) in zip(data, metadata):
-    #     sample = cp.asarray(sample)
-    #     if src not in partitions:
-    #         partitions[src] = []
-    #     partitions[src].append(sample)
-    # dataHasher.update_dataset(partitions, blockSize=data[0].nbytes)
-
 @pipeline_def(num_threads=8, device_id=0)
 def get_dali_pipeline_texts(dataPath, metaPath, device='gpu'):
     data = fn.readers.numpy(file_root=dataPath,
@@ -72,53 +56,95 @@ def get_dali_pipeline_texts(dataPath, metaPath, device='gpu'):
 
     if device == 'gpu':
         fn.python_function(data, metadata, batch_processing=True,
-            function=lattice_hash_texts, num_outputs=0, device='cpu')
+            function=lattice_hash, num_outputs=0, device='cpu')
         data = fn.copy(data, device='gpu')
 
     return data, metadata
 
-def main():
-    numPartitions = 1
-    dirichletAlpha = 1
-    print(f'Dataset partitions: {numPartitions}, Dirichlet alpha: {dirichletAlpha}', flush=True)
+def run_vgg():
+    # TORCH HUB: load pretrained ML model and save to file
+    model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
+    modelPath = './model.pth'
+    torch.save(model, modelPath)
+    model = model.cuda()
 
-    cifar10.prepare_cifar10(os.path.join('dataset', 'cifar10'), numPartitions, dirichletAlpha)
-    medicalqa.prepare_medicalqa(os.path.join('dataset', 'medicalqa'), numPartitions, dirichletAlpha)
+    datasetPath = os.path.join('dataset', 'cifar10')
+    formatter.prepare_data(datasetPath, 'uoft-cs/cifar10', 4, 1)
 
-    # for dataset in ['cifar10', 'medicalqa']:
-    #     datasetPath = os.path.join('dataset', dataset)
-    #     for batch in [128]:
-    #         print(f'Batch: {batch}', flush=True)
-    #         for device in ['gpu']:
-    #             print(f'DALI: {device}', flush=True)
-    #             dali_loader = DALIGenericIterator(
-    #                 [get_dali_pipeline_images(
-    #                     batch_size=batch,
-    #                     dataPath=os.path.join(datasetPath, 'data'),
-    #                     metaPath=os.path.join(datasetPath, 'metadata'),
-    #                     device=device,)],
-    #                 ['data', 'label'],
-    #                 reader_name='Reader1'
-    #             )
+    for batch in [128]:
+        print(f'Batch: {batch}', flush=True)
+        for device in ['gpu']:
+            print(f'DALI: {device}', flush=True)
+            dali_loader = DALIGenericIterator(
+                [get_dali_pipeline_images(
+                    batch_size=batch,
+                    dataPath=os.path.join(datasetPath, 'data'),
+                    metaPath=os.path.join(datasetPath, 'metadata'),
+                    device=device,)],
+                ['data', 'label'],
+                reader_name='Reader1'
+            )
 
-    #             t0 = time.monotonic()
+            t0 = time.monotonic()
 
-    #             if device == 'cpu':
-    #                 sign.sign(datasetPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
-    #                 sign.sign(modelPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
-    #             else:
-    #                 sign.sign(model, sign.HashType.SHA256, sign.Topology.MERKLE, sign.InputType.MODEL, modelHasher)
+            if device == 'cpu':
+                sign.sign(datasetPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
+                sign.sign(modelPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
+            else:
+                sign.sign(model, sign.HashType.SHA256, sign.Topology.MERKLE, sign.InputType.MODEL, modelHasher)
 
-    #             for i, data in enumerate(dali_loader):
-    #                 x, y = data[0]['data'], data[0]['label']
-    #                 x = x.cuda()
-    #                 pred = model(x)
+            for i, data in enumerate(dali_loader):
+                x, y = data[0]['data'], data[0]['label']
+                # x = x.cuda()
+                # pred = model(x)
 
-    #             torch.cuda.synchronize()
-    #             t1 = time.monotonic()
+            torch.cuda.synchronize()
+            t1 = time.monotonic()
 
-    #             print(f'DALI runtime: {(t1-t0)*1000:.2f} ms\n', flush=True)
+            print(f'DALI runtime: {(t1-t0)*1000:.2f} ms\n', flush=True)
 
-main()
+def run_bert():
+    # TORCH HUB: load pretrained ML model and save to file
+    model = torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased')
+    modelPath = './model.pth'
+    torch.save(model, modelPath)
+    model = model.cuda()
+
+    datasetPath = os.path.join('dataset', 'medicalqa')
+    formatter.prepare_data(datasetPath, 'lavita/medical-qa-shared-task-v1-toy', 4, 1)
+
+    print(f'Batch: {1}', flush=True)
+    for device in ['gpu']:
+        print(f'DALI: {device}', flush=True)
+        dali_loader = DALIGenericIterator(
+            [get_dali_pipeline_texts(
+                batch_size=1,
+                dataPath=os.path.join(datasetPath, 'data'),
+                metaPath=os.path.join(datasetPath, 'metadata'),
+                device=device,)],
+            ['data', 'label'],
+            reader_name='Reader1'
+        )
+
+        t0 = time.monotonic()
+
+        if device == 'cpu':
+            sign.sign(datasetPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
+            sign.sign(modelPath, sign.HashType.SHA256, sign.Topology.SEQUENTIAL, sign.InputType.FILE)
+        else:
+            sign.sign(model, sign.HashType.SHA256, sign.Topology.MERKLE, sign.InputType.MODEL, modelHasher)
+
+        for i, data in enumerate(dali_loader):
+            x, y = data[0]['data'], data[0]['label']
+            # x = x.cuda()
+            # pred = model(x)
+
+        torch.cuda.synchronize()
+        t1 = time.monotonic()
+
+        print(f'DALI runtime: {(t1-t0)*1000:.2f} ms\n', flush=True)
+
+# run_vgg()
+run_bert()
 print('Hashes of different dataset sources')
 print(dataHasher)

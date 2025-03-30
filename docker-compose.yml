@@ -3,7 +3,7 @@ services:
     build:
       dockerfile: sentry.dockerfile
     image: sentry:latest
-    network_mode: "host"
+    dns: 8.8.8.8
     # cap_add:
     #   - IPC_LOCK
     # devices:
