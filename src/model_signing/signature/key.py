@@ -104,3 +104,49 @@ class ECKeyVerifier(Verifier):
             raise VerificationError(
                 "signature verification failed " + str(e)
             ) from e
+
+class ECKeyGPUSigner(Signer):
+    """Provides a Signer using an elliptic curve private key for signing."""
+
+    def __init__(self, private_key: ec.EllipticCurvePrivateKey, signer=None):
+        self._private_key = private_key
+        self._signer = signer
+
+    @classmethod
+    def from_path(cls, private_key_path: str, password: str | None = None):
+        private_key = load_ec_private_key(private_key_path, password)
+        return cls(private_key)
+
+    def sign(self, stmnt: statement.Statement) -> bundle_pb.Bundle:
+        pae = encoding.pae(stmnt.pb)
+        
+        # TODO: convert to cuda python
+        # key = self._private_key.private_bytes(
+        #     serialization.Encoding.PEM,
+        #     serialization.PrivateFormat.TraditionalOpenSSL,
+        #     serialization.NoEncryption())
+        # gsv_sign_t signAction {.e = pae, .priv_key = key};
+        # GSV_sign_exec(1, 1, signAction);
+        # sig = {signAction.r, signAction.s}
+        sig = self._private_key.sign(pae, ec.ECDSA(SHA256()))
+
+        env = intoto_pb.Envelope(
+            payload=json_format.MessageToJson(stmnt.pb).encode(),
+            payload_type=encoding.PAYLOAD_TYPE,
+            signatures=[intoto_pb.Signature(sig=sig, keyid=None)],
+        )
+        bdl = bundle_pb.Bundle(
+            media_type="application/vnd.dev.sigstore.bundle.v0.3+json",
+            verification_material=bundle_pb.VerificationMaterial(
+                public_key=common_pb.PublicKey(
+                    raw_bytes=self._private_key.public_key().public_bytes(
+                        encoding=serialization.Encoding.PEM,
+                        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+                    ),
+                    key_details=common_pb.PublicKeyDetails.PKIX_ECDSA_P256_SHA_256,
+                )
+            ),
+            dsse_envelope=env,
+        )
+
+        return bdl

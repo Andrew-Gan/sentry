@@ -220,12 +220,11 @@ class MerkleGPU(hashing.StreamingHashEngine):
     # reduce factor is 1 for normal hashing
     # for lattice hash we spawn 8 times more threads to handle reduction
     # because each 64 byte digest can be represented as 8 uint64_t for summation
-    def __init__(self, hashblock, reduce, ctx, digestsize, reducefactor):
+    def __init__(self, hashblock, reduce, ctx, digestsize):
         self.ctx = ctx
         self.hashblock = hashblock
         self.reduce = reduce
         self.digestSize = digestsize
-        self.reduceFactor = reducefactor
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
@@ -261,7 +260,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
             while nBlock > 1:
                 myIn, myOut = myOut, myIn
                 nBlock = (nBlock + 1) & ~0b1
-                nThread = (nBlock // 2) * self.reduceFactor
+                nThread = (nBlock // 2)
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
                 nThread = np.array([nThread], dtype=np.uint64)
@@ -296,7 +295,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         while nBlock > 1:
             iData, oData = oData, iData
             nBlock = ((nBlock + 1) & ~0b1)
-            nThread = (nBlock // 2) * self.reduceFactor
+            nThread = (nBlock // 2)
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
 
@@ -335,12 +334,11 @@ class MerkleGPU(hashing.StreamingHashEngine):
         return self.digestSize
 
 class HomomorphicGPU(hashing.StreamingHashEngine):
-    def __init__(self, hashblock, adder, ctx, digestsize, reducefactor):
+    def __init__(self, hashblock, adder, ctx, digestsize):
         self.ctx = ctx
         self.hashblock = hashblock
         self.adder = adder
         self.digestSize = digestsize
-        self.reduceFactor = reducefactor
         self.allocatedSpace = 1
         self.iDataFull = checkCudaErrors(runtime.cudaMalloc(1))
         self.oDataFull = checkCudaErrors(runtime.cudaMalloc(1))
@@ -415,7 +413,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             while nBlock > 1:
                 iData, oData = oData, iData
                 nBlock = ((nBlock + 1) & ~0b1)
-                nThread = (nBlock // 2) * self.reduceFactor
+                nThread = (nBlock // 2) * 8
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
                 args = [oData, iData]
@@ -439,7 +437,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             args = [self.separatedSum[key][1], layerDigest]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
-                self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
+                self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
 
@@ -447,7 +445,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             args = [self.totalSum[1], layerDigest]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
-                self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
+                self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
 
@@ -504,7 +502,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             while nBlock > 1:
                 iData, oData = oData, iData
                 nBlock = ((nBlock + 1) & ~0b1)
-                nThread = (nBlock // 2) * self.reduceFactor
+                nThread = (nBlock // 2) * 8
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
                 args = [oData, iData]
@@ -520,7 +518,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             args = [self.separatedSum[src][1], oData]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
-                self.adder, 1, 1, 1, self.reduceFactor, 1, 1, self.digestSize,
+                self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
 

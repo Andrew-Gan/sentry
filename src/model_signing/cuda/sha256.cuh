@@ -168,19 +168,19 @@ __device__ void cuda_sha256_final(SHA256_CTX *ctx, uint8_t hash[])
 }
 
 extern "C" __global__
-void seq_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
+void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 	SHA256_CTX ctx;
 	sequential(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
 }
 
 extern "C" __global__
-void hash_sha256(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
+void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
 	SHA256_CTX ctx;
 	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32UL);
 }
 
 extern "C" __global__
-void reduce_sha256(uint8_t *out, uint8_t *in, size_t n) {
+void reduce(uint8_t *out, uint8_t *in, size_t n) {
 	extern __shared__ uint8_t shMem[];
 	SHA256_CTX ctx;
 	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32UL);
