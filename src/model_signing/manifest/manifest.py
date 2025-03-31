@@ -331,7 +331,6 @@ class StateLevelManifest(ItemizedManifest):
         Rather than recording the items in a list, we use a dictionary, to allow
         efficient updates and retrieval of digests.
         """
-        i = items[0]
         self._item_to_digest = {item.state: item.digest for item in items}
 
     def __eq__(self, other: Self):

@@ -536,7 +536,12 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
 
     @override
     def compute(self) -> hashing.Digest:
-        return hashing.Digest(self.digest_name, self.digest)
+        digests = []
+        for hash in self.separatedSum.values():
+            hash_cpu = bytes(64)
+            runtime.cudaMemcpy(hash_cpu, hash[0], 64, runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost)
+            digests.append(hashing.Digest(self.digest_name, hash_cpu))
+        return digests
 
     @property
     @override

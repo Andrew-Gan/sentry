@@ -43,12 +43,6 @@ import os
 
 log = logging.getLogger(__name__)
 
-if __name__ == "__main__":
-    SAMPLE_SIZE = 8
-else: # imported into another file
-    SAMPLE_SIZE = 1
-
-
 class HashType(Enum):
     SHA256  = ('sha256', 32, memory.SHA256)
     BLAKE2B = ('blake2b', 64, memory.BLAKE2)
@@ -303,6 +297,8 @@ def build_hasher(hashType: HashType, topology : Topology, inputType : InputType)
     return hasher
 
 def sign(item, hashType: HashType, topology : Topology, inputType : InputType, hasher = None):
+    if inputType == InputType.FILE and hashType == HashType.LATTICE:
+        raise RuntimeError('Lattice Hashing not supported for CPU file hashing')
     # early compilation of cuda modules
     if not hasher and inputType == InputType.MODEL:
         hasher = build_hasher(hashType, topology, inputType)
@@ -310,13 +306,15 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType, h
     logging.basicConfig(level=logging.INFO)
     args = _arguments()
     payload_signer = _get_payload_signer(args)
-    total_runtime = 0
+    
+    if inputType == InputType.DATASET:
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=None)
+        sig = model.sign_hash(item, payload_signer,
+            in_toto.DigestsIntotoPayload.from_manifest, serializer)
 
-    for _ in range(SAMPLE_SIZE):
+    else:
         if inputType == InputType.FILE:
-            if hashType == HashType.LATTICE:
-                raise RuntimeError('Lattice Hashing not supported for CPU file hashing')
-
             def hasher_factory(item) -> hashing.HashEngine:
                 return file.SimpleFileHasher(
                     file=item, content_hasher=hashType.value[2]())
@@ -339,18 +337,10 @@ def sign(item, hashType: HashType, topology : Topology, inputType : InputType, h
             ignore_paths=[args.sig_out],
         )
 
-        total_runtime += runtime
-
-        # if digestPrev:
-        #     assert(digestPrev == hasher.digest)
-        # digestPrev = hasher.digest
-
     if __name__ == '__main__':
-        print(f'Hash runtime: {1000*(total_runtime)/SAMPLE_SIZE:.2f} ms')
+        print(f'Hash runtime: {1000*runtime:.2f} ms')
 
     sig.write(args.sig_out)
-    # todo: find cpu hash location
-    # return hasher.digest
 
 
 if __name__ == "__main__":

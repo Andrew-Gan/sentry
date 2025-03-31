@@ -21,7 +21,7 @@ from .manifest import manifest
 from .serialization import serialization
 from .signature import verifying
 from .signing import signing
-import collections
+from .hashing import hashing
 
 PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
@@ -48,10 +48,26 @@ def sign(
     Returns:
         The model's signature.
     """
-    manifest, runtime = serializer.serialize(item, ignore_paths=ignore_paths)
-    payload = payload_generator(manifest)
+    manif, runtime = serializer.serialize(item, ignore_paths=ignore_paths)
+    payload = payload_generator(manif)
     sig = signer.sign(payload)
     return sig, runtime
+
+
+def sign_hash(
+    hashes: Iterable[hashing.Digest],
+    signer: signing.Signer,
+    payload_generator: PayloadGeneratorFunc,
+    serializer: serialization.Serializer,
+) -> signing.Signature:
+
+    manifestItems = []
+    for i, hash in enumerate(hashes):
+        manifestItems.append(manifest.StateManifestItem(state=i, digest=hash))
+    manif = serializer._build_manifest(manifestItems)
+    payload = payload_generator(manif)
+    sig = signer.sign(payload)
+    return sig
 
 
 def verify(
