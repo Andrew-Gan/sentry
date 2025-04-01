@@ -28,6 +28,9 @@ PayloadGeneratorFunc: TypeAlias = Callable[
 ]
 
 
+import time
+
+
 def sign(
     item,
     signer: signing.Signer,
@@ -48,10 +51,14 @@ def sign(
     Returns:
         The model's signature.
     """
-    manif, runtime = serializer.serialize(item, ignore_paths=ignore_paths)
+    t0 = time.monotonic()
+    manif, _ = serializer.serialize(item, ignore_paths=ignore_paths)
+    t1 = time.monotonic()
     payload = payload_generator(manif)
     sig = signer.sign(payload)
-    return sig, runtime
+    t2 = time.monotonic()
+    print(f'{(t1-t0)*1000:.2f}, {(t2-t1)*1000:.2f}')
+    return sig
 
 
 def sign_hash(
@@ -61,13 +68,13 @@ def sign_hash(
     serializer: serialization.Serializer,
 ) -> signing.Signature:
 
-    manifestItems = []
+    payload = []
     for i, hash in enumerate(hashes):
-        manifestItems.append(manifest.StateManifestItem(state=i, digest=hash))
-    manif = serializer._build_manifest(manifestItems)
-    payload = payload_generator(manif)
-    sig = signer.sign(payload)
-    return sig
+        manifestItem = manifest.StateManifestItem(state=i, digest=hash)
+        manif = serializer._build_manifest([manifestItem])
+        payload.append(payload_generator(manif))
+    sigs = signer.sign(payload)
+    return sigs
 
 
 def verify(

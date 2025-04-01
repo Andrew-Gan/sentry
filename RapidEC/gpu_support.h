@@ -45,7 +45,7 @@ void cgbn_check(cgbn_error_report_t *report, const char *file=NULL, int32_t line
     printf("CGBN error occurred: %s\n", cgbn_error_string(report));
 
     if(report->_instance!=0xFFFFFFFF) {
-      printf("Error reported by instance %d", report->_instance);
+      printf("Error reported by instance %lu", report->_instance);
       if(report->_blockIdx.x!=0xFFFFFFFF || report->_threadIdx.x!=0xFFFFFFFF)
         printf(", ");
       if(report->_blockIdx.x!=0xFFFFFFFF)

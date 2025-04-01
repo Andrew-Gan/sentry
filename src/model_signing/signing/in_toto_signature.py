@@ -65,6 +65,18 @@ class IntotoSigner(signing.Signer):
         return IntotoSignature(bundle)
 
 
+class IntotoBatchSigner(signing.Signer):
+    def __init__(self, sig_signer: signature_signing.Signer):
+        self._sig_signer = sig_signer
+
+    @override
+    def sign(self, payload: list[signing.SigningPayload]) -> IntotoSignature:
+        if not isinstance(payload[0], in_toto.IntotoPayload):
+            raise TypeError("only list[IntotoPayloads] are supported")
+        bundles = self._sig_signer.sign([p.statement for p in payload])
+        return [IntotoSignature(bundle) for bundle in bundles]
+
+
 class IntotoVerifier(signing.Verifier):
     def __init__(self, sig_verifier: signature_verifying.Verifier):
         self._sig_verifier = sig_verifier

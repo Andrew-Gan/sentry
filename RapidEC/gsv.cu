@@ -1,23 +1,25 @@
-#include <cuda.h>
-#include <gmp.h>
-#include <omp.h>
+// #include <cuda.h>
+// #include <gmp.h>
 
-#include <chrono>
-#include <cstdint>
-#include <cstdio>
-#include <cstdlib>
+// #include <chrono>
+// #include <cstdint>
+// #include <cstdio>
+// #include <cstdlib>
 
 #include "cgbn/cgbn.h"
 #include "gsv_wrapper.h"
 #include "support.h"
 
-#define MAX_NGPU 8
+// redefine alias
+#define uint32_t unsigned int
+
+#define MAX_SIG 8
 
 #define GSV_SM2  // enable optimization for SM2 (a=-3)
 
 #define GSV_TABLE_SIZE 512  // size of precomputed table
 
-#define GSV_MAX_INS 8388608  // maximum number of instants in a single kernel
+#define GSV_MAX_INS 1024  // maximum number of instants in a single kernel
 
 __constant__ cgbn_mem_t<GSV_BITS> d_mul_table[GSV_TABLE_SIZE];
 #ifdef GSV_KNOWN_PKEY
@@ -677,13 +679,13 @@ __global__ void kernel_sig_verify(cgbn_error_report_t *report, verify_ins_t *ins
 // global variables
 int TPB, TPI, IPB;
 ec_t sm2;
-cudaStream_t stream[MAX_NGPU];
-sign_ins_t *d_sign_ins[MAX_NGPU];
-verify_ins_t *d_verify_ins[MAX_NGPU];
-int32_t *d_results[MAX_NGPU];
-cgbn_error_report_t *report[MAX_NGPU];
+sign_ins_t *d_sign_ins;
+verify_ins_t *d_verify_ins[MAX_SIG];
+int32_t *d_results[MAX_SIG];
+cgbn_error_report_t *report;
 
-void GSV_sign_init(int num_gpus) {
+extern "C"
+void sign_init(int num_sigs) {
     typedef gsv_params_t<GSV_TPI> params;
 
     TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
@@ -696,191 +698,98 @@ void GSV_sign_init(int num_gpus) {
     set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
 #endif
 
-    omp_set_num_threads(num_gpus);
+    CUDA_CHECK(cudaMalloc((void **)&d_sign_ins, sizeof(sign_ins_t) * GSV_MAX_INS));
+    CUDA_CHECK(cgbn_error_report_alloc(&report));
 
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-        CUDA_CHECK(cudaStreamCreateWithFlags(&stream[dev_id], cudaStreamNonBlocking));
+    cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
 
-        CUDA_CHECK(cudaMalloc((void **)&d_sign_ins[dev_id], sizeof(sign_ins_t) * GSV_MAX_INS));
-        CUDA_CHECK(cgbn_error_report_alloc(&report[dev_id]));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table,
+        sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
 
-        cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
-
-        CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
-
-        free(mul_table);
-    }
+    free(mul_table);
 }
 
-void GSV_sign_exec(int num_gpus, int count, gsv_sign_t *sig) {
+extern "C"
+gsv_sign_t* sign_exec(int num_sigs, gsv_sign_t *sig) {
     typedef gsv_params_t<GSV_TPI> params;
 
-    auto t_start = std::chrono::high_resolution_clock::now();
+    CUDA_CHECK(cudaMemcpy(d_sign_ins, sig, sizeof(sign_ins_t), cudaMemcpyHostToDevice));
+    kernel_sig_sign<params><<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_sign_ins, num_sigs, sm2);
 
-    // for (int i = 0; i < count; i++) {
-    //     random_words(sig[i].k._limbs, GSV_BITS / 32);
-    // }
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CGBN_CHECK(report);
+    CUDA_CHECK(cudaMemcpy(sig, d_sign_ins, sizeof(sign_ins_t) * num_sigs, cudaMemcpyDeviceToHost));
 
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(
-            cudaMemcpyAsync(d_sign_ins[dev_id], sig, sizeof(sign_ins_t) * count, cudaMemcpyHostToDevice, stream[dev_id]));
-    }
-
-    auto k_start = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        kernel_sig_sign<params><<<(count + IPB - 1) / IPB, TPB>>>(report[dev_id], d_sign_ins[dev_id], count, sm2);
-    }
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-        CGBN_CHECK(report[dev_id]);
-    }
-
-    auto k_end = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(
-            cudaMemcpyAsync(sig, d_sign_ins[dev_id], sizeof(sign_ins_t) * count, cudaMemcpyDeviceToHost,
-            stream[dev_id]));
-    }
-
-    auto t_end = std::chrono::high_resolution_clock::now();
-
-    std::chrono::duration<double> t_diff = t_end - t_start;
-    std::chrono::duration<double> k_diff = k_end - k_start;
-
-    printf("Wall time: %lfs (Mem transfer %lfs), Speed: %lf sign/s (w/o mem transfer: %lfV/s)\n", t_diff.count(),
-           t_diff.count() - k_diff.count(), (double)count * num_gpus / t_diff.count(), (double)count * num_gpus / k_diff.count());
+    return sig;
 }
 
-void GSV_sign_close(int num_gpus) {
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(cudaStreamDestroy(stream[dev_id]));
-
-        CUDA_CHECK(cudaFree(d_sign_ins[dev_id]));
-        CUDA_CHECK(cgbn_error_report_free(report[dev_id]));
-    }
+extern "C"
+void sign_close(int num_sigs) {
+    CUDA_CHECK(cudaFree(d_sign_ins));
+    CUDA_CHECK(cgbn_error_report_free(report));
 }
 
-void GSV_verify_init(int num_gpus) {
-    typedef gsv_params_t<GSV_TPI> params;
+// extern "C"
+// void verify_init(int num_sigs) {
+//     typedef gsv_params_t<GSV_TPI> params;
 
-    TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
-    TPI = params::TPI;
-    IPB = TPB / TPI;  // IPB: instances per block
+//     TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
+//     TPI = params::TPI;
+//     IPB = TPB / TPI;  // IPB: instances per block
 
-    set_words(sm2.order._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", GSV_BITS / 32);
-    set_words(sm2.field._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", GSV_BITS / 32);
-#ifndef GSV_SM2
-    set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
-#endif
+//     set_words(sm2.order._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", GSV_BITS / 32);
+//     set_words(sm2.field._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", GSV_BITS / 32);
+// #ifndef GSV_SM2
+//     set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
+// #endif
 
-    omp_set_num_threads(num_gpus);
+//     for (int i = 0; i < num_sigs; i++) {
+//         CUDA_CHECK(cudaMalloc((void **)&d_verify_ins[i], sizeof(verify_ins_t) * GSV_MAX_INS));
+//         CUDA_CHECK(cudaMalloc((void **)&d_results[i], sizeof(int32_t) * GSV_MAX_INS));
+//         CUDA_CHECK(cgbn_error_report_alloc(&report));
 
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-        CUDA_CHECK(cudaStreamCreateWithFlags(&stream[dev_id], cudaStreamNonBlocking));
+//         cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
+// #ifdef GSV_KNOWN_PKEY
+//         cgbn_mem_t<GSV_BITS> *mul_table2 = gsv_t<params>::prepare_table2();
+// #endif
 
-        CUDA_CHECK(cudaMalloc((void **)&d_verify_ins[dev_id], sizeof(verify_ins_t) * GSV_MAX_INS));
-        CUDA_CHECK(cudaMalloc((void **)&d_results[dev_id], sizeof(int32_t) * GSV_MAX_INS));
-        CUDA_CHECK(cgbn_error_report_alloc(&report[dev_id]));
+//         CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+// #ifdef GSV_KNOWN_PKEY
+//         CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table2, mul_table2, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+// #endif
 
-        cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
-#ifdef GSV_KNOWN_PKEY
-        cgbn_mem_t<GSV_BITS> *mul_table2 = gsv_t<params>::prepare_table2();
-#endif
+//         free(mul_table);
+// #ifdef GSV_KNOWN_PKEY
+//         free(mul_table2);
+// #endif
+//     }
+// }
 
-        CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
-#ifdef GSV_KNOWN_PKEY
-        CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table2, mul_table2, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
-#endif
+// extern "C"
+// void verify_exec(int num_sigs, int count, gsv_verify_t *sig, int *results) {
+//     typedef gsv_params_t<GSV_TPI> params;
 
-        free(mul_table);
-#ifdef GSV_KNOWN_PKEY
-        free(mul_table2);
-#endif
-    }
-}
+//     for (int i = 0; i < num_sigs; i++) {
+//         cudaMemcpyAsync(d_verify_ins[i], sig, sizeof(verify_ins_t) * count,
+//             cudaMemcpyHostToDevice, streams[i]);
+//         kernel_sig_verify<params>
+//             <<<(count + IPB - 1) / IPB, TPB>>>(report[i], d_verify_ins[i], count, sm2, d_results[i]);
+//     }
 
-void GSV_verify_exec(int num_gpus, int count, gsv_verify_t *sig, int *results) {
-    typedef gsv_params_t<GSV_TPI> params;
+//     for (int i = 0; i < num_sigs; i++) {
+//         CUDA_CHECK(cudaStreamSynchronize(streams[i]));
+//         CGBN_CHECK(report[i]);
+//         CUDA_CHECK(cudaMemcpy(results, d_results[i], sizeof(int32_t) * count,
+//             cudaMemcpyDeviceToHost));
+//     }
+// }
 
-    auto t_start = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(
-            cudaMemcpyAsync(d_verify_ins[dev_id], sig, sizeof(verify_ins_t) * count, cudaMemcpyHostToDevice, stream[dev_id]));
-    }
-
-    auto k_start = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        kernel_sig_verify<params>
-            <<<(count + IPB - 1) / IPB, TPB>>>(report[dev_id], d_verify_ins[dev_id], count, sm2, d_results[dev_id]);
-    }
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(cudaDeviceSynchronize());
-        CGBN_CHECK(report[dev_id]);
-    }
-
-    auto k_end = std::chrono::high_resolution_clock::now();
-
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(
-            cudaMemcpyAsync(results, d_results[dev_id], sizeof(int32_t) * count, cudaMemcpyDeviceToHost,
-            stream[dev_id]));
-    }
-
-    auto t_end = std::chrono::high_resolution_clock::now();
-
-    std::chrono::duration<double> t_diff = t_end - t_start;
-    std::chrono::duration<double> k_diff = k_end - k_start;
-
-    printf("Wall time: %lfs (Mem transfer %lfs), Speed: %lf verify/s (w/o mem transfer: %lfV/s)\n", t_diff.count(),
-           t_diff.count() - k_diff.count(), (double)count * num_gpus / t_diff.count(), (double)count * num_gpus / k_diff.count());
-}
-
-void GSV_verify_close(int num_gpus) {
-#pragma omp parallel for
-    for (int dev_id = 0; dev_id < num_gpus; dev_id++) {
-        CUDA_CHECK(cudaSetDevice(dev_id));
-
-        CUDA_CHECK(cudaStreamDestroy(stream[dev_id]));
-
-        CUDA_CHECK(cudaFree(d_verify_ins[dev_id]));
-        CUDA_CHECK(cudaFree(d_results[dev_id]));
-        CUDA_CHECK(cgbn_error_report_free(report[dev_id]));
-    }
-}
+// extern "C"
+// void verify_close(int num_sigs) {
+//     for (int i = 0; i < num_sigs; i++) {
+//         CUDA_CHECK(cudaStreamDestroy(streams[i]));
+//         CUDA_CHECK(cudaFree(d_verify_ins[i]));
+//         CUDA_CHECK(cudaFree(d_results[i]));
+//         CUDA_CHECK(cgbn_error_report_free(report[i]));
+//     }
+// }
