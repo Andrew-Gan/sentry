@@ -14,40 +14,43 @@ import cupy as cp
 torch.cuda.synchronize()
 dataHasher = sign.compile_cuda_hasher(HashType.LATTICE, Topology.HOMOMORPHIC, InputType.DIGEST)
 modelHasher = sign.compile_cuda_hasher(HashType.SHA256, Topology.MERKLE, InputType.MODULE)
-gpuSigner = sign.compile_cuda_signer()
+# gpuSigner = sign.compile_cuda_signer()
 
 def lattice_hash(data: list, metadata: list):
     partitions = {}
     for sample, (src, _) in zip(data, metadata):
-        sample = cp.asarray(sample)
+        src = src.item()
         if src not in partitions:
             partitions[src] = []
         partitions[src].append(sample)
     dataHasher.update_dataset(partitions, blockSize=data[0].nbytes)
 
-def get_image_model_dataloader(batch: int, device: str):
-    # TORCH HUB: load pretrained ML model and save to file
-    model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', pretrained=True)
+# TORCH HUB: load pretrained ML model and save to file
+def get_model(model_name: list, device: str):
+    if len(model_name) == 2:
+        model = torch.hub.load(model_name[0], model_name[1], pretrained=True)
+    elif len(model_name) == 3:
+        model = torch.hub.load(model_name[0], model_name[1], model_name[2])
+
     modelPath = './model.pth'
     torch.save(model, modelPath)
-    model = model.cuda()
+    return model.to('cuda' if device=='gpu' else device), modelPath
 
-    datasetPath = os.path.join('dataset', 'cifar10')
-    dataPath=os.path.join(datasetPath, 'data')
-    metaPath=os.path.join(datasetPath, 'metadata')
-    formatter.prepare_data(datasetPath, 'uoft-cs/cifar10', 4, 1)
-
+def get_image_dataloader(dataPath: str, metaPath: str, batch: int, device: str, gds: bool):
     @pipeline_def(num_threads=8, device_id=0)
-    def get_dali_pipeline_images(dataPath, metaPath, device='gpu'):
+    def get_dali_pipeline_images(dataPath, metaPath, device='gpu', gds=False):
         data = fn.readers.numpy(file_root=dataPath, random_shuffle=True,
-                                device='cpu', name='Reader1', seed=0)
+            device='cpu' if not gds else device, name='Reader1', seed=0)
         metadata = fn.readers.numpy(file_root=metaPath, random_shuffle=True,
-                                device='cpu', name='Reader2', seed=0)
+            device='cpu' if not gds else device, name='Reader2', seed=0)
+        
+        if device == 'gpu' and not gds:
+            data = fn.copy(data, device='gpu')
+            metadata = fn.copy(metadata, device='gpu')
 
         if device == 'gpu':
             fn.python_function(data, metadata, batch_processing=True,
-                function=lattice_hash, num_outputs=0, device='cpu')
-            data = fn.copy(data, device='gpu')
+                function=lattice_hash, num_outputs=0, device='gpu')
 
         data = fn.random_resized_crop(data, size=[256, 256], device=device)
         data = fn.rotate(data, angle=fn.random.uniform(range=[0, 360]), device=device)
@@ -59,39 +62,30 @@ def get_image_model_dataloader(batch: int, device: str):
 
         return data, metadata
 
-    print(f'Batch: {batch}, DALI: {device}', flush=True)
     dali_loader = DALIGenericIterator(
         [get_dali_pipeline_images(batch_size=batch, dataPath=dataPath,
-            metaPath=metaPath, device=device,)],
+            metaPath=metaPath, device=device, gds=gds)],
         ['data', 'label'],
         reader_name='Reader1'
     )
 
-    return model, modelPath, dali_loader, datasetPath
+    return dali_loader, datasetPath
 
-def get_llm_model_dataloader(batch: int, device: str):
-    # TORCH HUB: load pretrained ML model and save to file
-    model = torch.hub.load('huggingface/pytorch-transformers', 'model', 'bert-base-uncased')
-    modelPath = './model.pth'
-    torch.save(model, modelPath)
-    model = model.cuda()
-
-    datasetPath = os.path.join('dataset', 'hellaswag')
-    dataPath=os.path.join(datasetPath, 'data')
-    metaPath=os.path.join(datasetPath, 'metadata')
-    formatter.prepare_data(datasetPath, 'Rowan/hellaswag', 4, 1)
-
+def get_text_dataloader(dataPath: str, metaPath: str, batch: int, device: str, gds: bool):
     @pipeline_def(num_threads=8, device_id=0)
-    def get_dali_pipeline_texts(dataPath, metaPath, device='gpu'):
+    def get_dali_pipeline_texts(dataPath, metaPath, device='gpu', gds=False):
         data = fn.readers.numpy(file_root=dataPath, random_shuffle=True,
-                                device='cpu', name='Reader1', seed=0)
+            device='cpu' if not gds else device, name='Reader1', seed=0)
         metadata = fn.readers.numpy(file_root=metaPath, random_shuffle=True,
-                                device='cpu', name='Reader2', seed=0)
+            device='cpu' if not gds else device, name='Reader2', seed=0)
+
+        if device == 'gpu' and not gds:
+            data = fn.copy(data, device='gpu')
+            metadata = fn.copy(metadata, device='gpu')
 
         if device == 'gpu':
             fn.python_function(data, metadata, batch_processing=True,
-                function=lattice_hash, num_outputs=0, device='cpu')
-            data = fn.copy(data, device='gpu')
+                function=lattice_hash, num_outputs=0, device='gpu')
 
         data = fn.pad(data, device=device)
 
@@ -100,18 +94,12 @@ def get_llm_model_dataloader(batch: int, device: str):
     print(f'Batch: {batch}, DALI: {device}', flush=True)
     dali_loader = DALIGenericIterator(
             [get_dali_pipeline_texts(batch_size=batch, dataPath=dataPath,
-                metaPath=metaPath, device=device,)],
+                metaPath=metaPath, device=device, gds=gds)],
         ['data', 'label'],
         reader_name='Reader1'
     )
 
-    return model, modelPath, dali_loader, datasetPath
-
-def sign_model(model: str | torch.nn.Module, device: str):
-    if device == 'cpu':
-        sign.sign(model, HashType.SHA256, Topology.SERIAL, InputType.FILE)
-    elif device == 'gpu':
-        sign.sign(model, HashType.SHA256, Topology.MERKLE, InputType.MODULE, modelHasher)
+    return dali_loader, datasetPath
 
 def inference(model: torch.nn.Module, dataloader: DALIGenericIterator):
     for data in dataloader:
@@ -122,11 +110,23 @@ def inference(model: torch.nn.Module, dataloader: DALIGenericIterator):
 
 if __name__ == "__main__":
     device = 'gpu'
-    for batch in [1, 32, 64, 128, 256, 512]:
-        # model, modelPath, dataloader, datasetPath = get_image_model_dataloader(batch, device)
-        model, modelPath, dataloader, datasetPath = get_llm_model_dataloader(batch, device)
+    gds = True
+    model, modelPath = get_model(['pytorch/vision:v0.10.0', 'vgg19'], device=device)
+    # model, modelPath = get_model(['huggingface/pytorch-transformers', 'model', 'bert-base-uncased'], device=device)
 
-        model = inference(model, dataloader) # initializer
+    datasetPath = os.path.join('dataset', 'cifar10')
+    # datasetPath = os.path.join('dataset', 'hellaswag')
+
+    # formatter.prepare_data(datasetPath, 'uoft-cs/cifar10', 4, 1)
+    # formatter.prepare_data(datasetPath, 'Rowan/hellaswag', 4, 1)
+
+    for batch in [32]:
+        dataPath = os.path.join(datasetPath, 'data')
+        metaPath = os.path.join(datasetPath, 'metadata')
+        dataloader, datasetPath = get_image_dataloader(dataPath, metaPath, batch, device, gds)
+        # dataloader, datasetPath = get_text_dataloader(dataPath, metaPath, batch, device, gds)
+
+        model = inference(model, dataloader) # initialise overhead
         t0 = time.monotonic()
 
         model = inference(model, dataloader)
@@ -134,18 +134,28 @@ if __name__ == "__main__":
         t1 = time.monotonic()
         print(f'Model Training with DALI: {(t1-t0)*1000:.2f} ms\n', flush=True)
 
-        sign_model(model if device=='gpu' else modelPath, device)
+        del dataloader
 
-        t2 = time.monotonic()
-        print(f'Model Signing: {(t2-t1)*1000:.2f} ms\n', flush=True)
+    t2 = time.monotonic()
 
-        if device == 'cpu':
-            sign.sign(datasetPath, HashType.SHA256, Topology.SERIAL, InputType.FILE)
-        elif device == 'gpu':
-            sign.sign(dataHasher.compute(), HashType.LATTICE, Topology.HOMOMORPHIC, InputType.DIGEST)
+    if device == 'cpu':
+        sign.sign(modelPath, HashType.SHA256, Topology.SERIAL, InputType.FILE)
+    elif device == 'gpu':
+        sign.sign(model, HashType.SHA256, Topology.MERKLE, InputType.MODULE,
+            modelHasher)
 
-        t3 = time.monotonic()
-        print(f'Dataset Signing: {(t3-t2)*1000:.2f} ms\n', flush=True)
+    t3 = time.monotonic()
+    print(f'Model Signing: {(t3-t2)*1000:.2f} ms\n', flush=True)
+
+    if device == 'cpu':
+        sign.sign(datasetPath, HashType.SHA256, Topology.SERIAL, InputType.FILE)
+    elif device == 'gpu':
+        sign.sign(dataHasher.compute(), HashType.LATTICE, Topology.HOMOMORPHIC, InputType.DIGEST)
+
+    t4 = time.monotonic()
+    print(f'Dataset Signing: {(t4-t3)*1000:.2f} ms\n', flush=True)
+
+    del model
 
     print('Hashes of different dataset sources')
     print(dataHasher)
