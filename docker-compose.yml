@@ -1,21 +1,13 @@
 services:
-  sentry:
+  sentry_dataset: &sentry
     build:
       dockerfile: sentry.dockerfile
     image: sentry:latest
     dns: 8.8.8.8
-    # cap_add:
-    #   - IPC_LOCK
-    # devices:
-      # - "/dev/infiniband/rdma_cm"
-      # - "/dev/infiniband/uverbs*"
-      # - "/dev/nvidia-fs*"
-    container_name: sentry
+    container_name: sentry_dataset
     volumes:
-      # - /etc/udev:/etc/udev
       - /share/sign-ml/torch:/home/torch
       - /share/sign-ml/dataset:/home/dataset
-      # - /run/udev:/run/udev:ro
     deploy:
       resources:
         limits:
@@ -23,5 +15,16 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['1']
+              device_ids: ['0']
               capabilities: [gpu]
+    command: ["python", "agent_dataset.py", "uoft-cs/cifar10", "16", "1", "dataset/cifar10"]
+
+  sentry_trainer:
+    <<: *sentry
+    container_name: sentry_trainer
+    command: ["python", "agent_trainer.py", "--sig_out", "/home/dataset/cifar10/dataset.sig", "--model_path", "/home/torch", "private-key", "--private_key", "private.pem"]
+
+  sentry_inferencer:
+    <<: *sentry
+    container_name: sentry_inferencer
+    command: ["python", "agent_inferencer.py", "--sig_path", "/home/dataset/cifar10/dataset.sig", "--model_path", "/home/torch", "private-key", "--public_key", "public.pem"]

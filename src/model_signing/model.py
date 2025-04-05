@@ -22,21 +22,21 @@ from .serialization import serialization
 from .signature import verifying
 from .signing import signing
 from .hashing import hashing
+import collections
+import pathlib
 
 PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
 
 
-import time
-
-
 def sign(
-    item,
+    item: pathlib.Path | collections.OrderedDict,
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
+    skipHash: bool = False,
 ) -> signing.Signature:
     """Provides a wrapper function for the steps necessary to sign a model.
 
@@ -51,38 +51,27 @@ def sign(
     Returns:
         The model's signature.
     """
-    t0 = time.monotonic()
-    manif, _ = serializer.serialize(item, ignore_paths=ignore_paths)
-    t1 = time.monotonic()
-    payload = payload_generator(manif)
-    sig = signer.sign(payload)
-    t2 = time.monotonic()
-    print(f'{(t1-t0)*1000:.2f}, {(t2-t1)*1000:.2f}')
-    return sig
-
-
-def sign_hash(
-    hashes: Iterable[hashing.Digest],
-    signer: signing.Signer,
-    payload_generator: PayloadGeneratorFunc,
-    serializer: serialization.Serializer,
-) -> signing.Signature:
+    items = item if isinstance(item, list) else [item]
 
     payload = []
-    for i, hash in enumerate(hashes):
-        manifestItem = manifest.StateManifestItem(state=i, digest=hash)
-        manif = serializer._build_manifest([manifestItem])
+    for item in items:
+        if skipHash:
+            manifestItem = manifest.StateManifestItem(state=item[0], digest=item[1])
+            manif = serializer._build_manifest([manifestItem])
+        else:
+            manif = serializer.serialize(item, ignore_paths=ignore_paths)
         payload.append(payload_generator(manif))
-    sigs = signer.sign(payload)
-    return sigs
+
+    return signer.sign(payload, hashes_d=serializer.hashes_d if hasattr(serializer, 'hashes_d') else None)
 
 
 def verify(
-    sig: signing.Signature,
+    sig: signing.Signature | Iterable[signing.Signature],
     verifier: signing.Verifier,
-    model_path: pathlib.Path,
+    item: pathlib.Path | collections.OrderedDict | Iterable[hashing.Digest],
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
+    skipHash: bool = False,
 ):
     """Provides a simple wrapper to verify models.
 
@@ -97,7 +86,16 @@ def verify(
     Raises:
         verifying.VerificationError: on any verification error.
     """
-    peer_manifest = verifier.verify(sig)
-    local_manifest = serializer.serialize(model_path, ignore_paths=ignore_paths)
-    if peer_manifest != local_manifest:
-        raise verifying.VerificationError("the manifests do not match")
+    sigs = sig if isinstance(sig, list) else [sig]
+    items = item if isinstance(item, list) else [item]
+
+    peer_manifest = verifier.verify(sigs)
+    for i, (item, sig) in enumerate(zip(items, sigs)):
+        if skipHash:
+            manifestItem = manifest.StateLevelManifest(state=i, digest=item)
+            local_manifest = serializer._build_manifest([manifestItem])
+        else:
+            local_manifest = serializer.serialize(item, ignore_paths=ignore_paths)
+
+        if peer_manifest != local_manifest:
+            raise verifying.VerificationError(f'the manifests do not match at {i}')

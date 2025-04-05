@@ -41,32 +41,10 @@ from typing_extensions import override
 
 from . import hashing
 
-from cuda.bindings import driver, nvrtc, runtime
+from cuda.bindings import driver, runtime
 import numpy as np
 import collections
-import torch
-import cupy as cp
-
-
-def _cudaGetErrorEnum(error):
-    if isinstance(error, driver.CUresult):
-        err, name = driver.cuGetErrorName(error)
-        return name if err == driver.CUresult.CUDA_SUCCESS else "<unknown>"
-    elif isinstance(error, nvrtc.nvrtcResult):
-        return nvrtc.nvrtcGetErrorString(error)[1]
-    else:
-        raise RuntimeError('Unknown error type: {}'.format(error))
-
-
-def checkCudaErrors(result):
-    if result[0].value:
-        raise RuntimeError("CUDA error code={}({})".format(result[0].value, _cudaGetErrorEnum(result[0])))
-    if len(result) == 1:
-        return None
-    elif len(result) == 2:
-        return result[1]
-    else:
-        return result[1:]
+from ..cuda.utils import checkCudaErrors
 
 
 class SHA256(hashing.StreamingHashEngine):
@@ -225,11 +203,10 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.hashblock = hashblock
         self.reduce = reduce
         self.digestSize = digestsize
+        self.sepDigests = {}
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
-        self.digest = bytes(self.digestSize)
-        digests = checkCudaErrors(runtime.cudaMalloc(len(data)*self.digestSize))
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for i in range(len(data))]
         blockSize = (blockSize, np.array([blockSize], dtype=np.uint64))
@@ -239,7 +216,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         iData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
         oData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
         
-        for i, (s, v, nBlock) in enumerate(zip(streams, data.values(), nBlocks)):
+        for s, (layer, v), nBlock in zip(streams, data.items(), nBlocks):
             nThread = nBlock
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
@@ -272,9 +249,9 @@ class MerkleGPU(hashing.StreamingHashEngine):
                 ))
                 nBlock = grid
 
-            checkCudaErrors(runtime.cudaMemcpyAsync(digests + i * self.digestSize,
-                myOut[0], self.digestSize,
-                runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, s))
+            self.sepDigests[layer] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+            checkCudaErrors(runtime.cudaMemcpyAsync(self.sepDigests[layer], myOut[0],
+                self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, s))
 
             currBlock += nBlock
         
@@ -285,43 +262,17 @@ class MerkleGPU(hashing.StreamingHashEngine):
         checkCudaErrors(runtime.cudaFree(iData))
         checkCudaErrors(runtime.cudaFree(oData))
 
-        nBlock = (len(data) + 1) & ~0b1
-        nThread = nBlock // 2
-        stream = checkCudaErrors(runtime.cudaStreamCreate())
-        output = checkCudaErrors(runtime.cudaMalloc(nThread*self.digestSize))
-        iData = (digests, np.array([digests], dtype=np.uint64))
-        oData = (output, np.array([output], dtype=np.uint64))
-
-        while nBlock > 1:
-            iData, oData = oData, iData
-            nBlock = ((nBlock + 1) & ~0b1)
-            nThread = (nBlock // 2)
-            block = min(512, nThread)
-            grid = (nThread + (block-1)) // block
-
-            nThread = np.array([nThread], dtype=np.uint64)
-            args = [oData[1], iData[1], nThread]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-            nBlock = grid
-
-        checkCudaErrors(runtime.cudaMemcpyAsync(self.digest, digests, self.digestSize,
-            runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost, stream))
-        checkCudaErrors(runtime.cudaFreeAsync(iData[0], stream))
-        checkCudaErrors(runtime.cudaFreeAsync(oData[0], stream))
-        checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-        checkCudaErrors(runtime.cudaStreamDestroy(stream))
-
     @override
     def reset(self, data: bytes = b"") -> None:
         pass
 
     @override
     def compute(self) -> hashing.Digest:
-        return hashing.Digest(self.digest_name, self.digest)
+        digests = []
+        for key, hash in self.sepDigests.items():
+            digest = hashing.Digest(self.digest_name, bytes(64))
+            digests.append((key, digest, hash))
+        return digests
 
     @property
     @override
@@ -342,21 +293,21 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         self.allocatedSpace = 1
         self.iDataFull = checkCudaErrors(runtime.cudaMalloc(1))
         self.oDataFull = checkCudaErrors(runtime.cudaMalloc(1))
-        self.separatedSum = {}
+        self.sepDigests = {}
         totalSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         self.totalSum = (totalSum, np.array([totalSum], dtype=np.uint64))
     
-    # def __del__(self):
-    #     checkCudaErrors(runtime.cudaFree(self.iDataFull))
-    #     checkCudaErrors(runtime.cudaFree(self.oDataFull))
-    #     for s in self.separatedSum:
-    #         checkCudaErrors(runtime.cudaFree(s[0]))
-    #     checkCudaErrors(runtime.cudaFree(self.totalSum[0]))
+    def __exit__(self):
+        checkCudaErrors(runtime.cudaFree(self.iDataFull))
+        checkCudaErrors(runtime.cudaFree(self.oDataFull))
+        for s in self.sepDigests:
+            checkCudaErrors(runtime.cudaFree(s[0]))
+        checkCudaErrors(runtime.cudaFree(self.totalSum[0]))
     
     def __str__(self):
         hashString = ''
-        for k in range(len(self.separatedSum)):
-            v = self.separatedSum[k]
+        for k in range(len(self.sepDigests)):
+            v = self.sepDigests[k]
             tmp = bytes(self.digestSize)
             checkCudaErrors(runtime.cudaMemcpy(tmp, v[0], self.digestSize,
                 runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost))
@@ -366,7 +317,6 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        self.digest = bytes(self.digestSize)
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
@@ -374,9 +324,9 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         totalBlocks = 0
         for k, v in data.items():
             # register new hash category in dictionary
-            if k not in self.separatedSum:
-                s = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-                self.separatedSum[k] = (s, np.array([s], dtype=np.uint64))
+            if k not in self.sepDigests:
+                mem = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+                self.sepDigests[k] = (mem, np.array([mem], dtype=np.uint64))
             unsortedLayers.append((k, v.data_ptr(), v.nbytes))
             sortedLayers = sorted(unsortedLayers, key=lambda x: x[2])
             totalBlocks += (v.nbytes + blockSize - 1) // blockSize
@@ -434,7 +384,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             layerDigest = np.array([base + currBytes], dtype=np.uint64)
 
             # add layer hash to layer sum
-            args = [self.separatedSum[key][1], layerDigest]
+            args = [self.sepDigests[key][1], layerDigest]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
@@ -455,19 +405,18 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             currBytes += nBlock * self.digestSize
     
     # partitions: src -> list of cupy ndarrays
-    def update_dataset(self, partitions: collections.OrderedDict, blockSize) -> None:
+    def update_dataset(self, data: collections.OrderedDict, blockSize) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        self.digest = bytes(self.digestSize)
-        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(partitions))]
+        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
         totalBlocks = 0
-        for src, samples in partitions.items():
+        for k, v in data.items():
             # register new hash category in dictionary
-            if src not in self.separatedSum:
+            if k not in self.sepDigests:
                 mem = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-                self.separatedSum[src] = (mem, np.array([mem], dtype=np.uint64))
-            partitionBytes = len(samples) * blockSize
+                self.sepDigests[k] = (mem, np.array([mem], dtype=np.uint64))
+            partitionBytes = len(v) * blockSize
             totalBlocks += (partitionBytes + blockSize - 1) // blockSize
         
         spaceToAlloc = totalBlocks * self.digestSize
@@ -479,7 +428,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             self.allocatedSpace = spaceToAlloc
 
         currBytes = 0
-        for stream, (src, samples) in zip(streams, partitions.items()):
+        for stream, (src, samples) in zip(streams, data.items()):
             samplePtrs = np.array([s.data.ptr for s in samples], dtype=np.uint64)
             samplePtrsA = checkCudaErrors(runtime.cudaMallocAsync(samplePtrs.nbytes, stream))
             checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
@@ -515,7 +464,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
                 nBlock = grid
             
             # add layer hash to layer sum
-            args = [self.separatedSum[src][1], oData]
+            args = [self.sepDigests[src][1], oData]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
@@ -533,12 +482,11 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         pass
 
     @override
-    def compute(self) -> hashing.Digest:
+    def compute(self) -> collections.OrderedDict:
         digests = []
-        for hash in self.separatedSum.values():
-            hash_cpu = bytes(64)
-            runtime.cudaMemcpy(hash_cpu, hash[0], 64, runtime.cudaMemcpyKind.cudaMemcpyDeviceToHost)
-            digests.append(hashing.Digest(self.digest_name, hash_cpu))
+        for key, hash in self.sepDigests.items():
+            digest = hashing.Digest(self.digest_name, bytes(64))
+            digests.append((key, digest, hash))
         return digests
 
     @property

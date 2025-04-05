@@ -28,7 +28,6 @@ from ..hashing import file
 from ..hashing import hashing
 from ..manifest import manifest
 from . import serialization
-import time
 
 
 def check_file_or_directory(
@@ -161,8 +160,6 @@ class FilesSerializer(serialization.Serializer):
             if path.is_file() and not _ignored(path, ignore_paths):
                 paths.append(path)
 
-        t0 = time.monotonic()
-
         manifest_items = []
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self._max_workers
@@ -173,10 +170,8 @@ class FilesSerializer(serialization.Serializer):
             ]
             for future in concurrent.futures.as_completed(futures):
                 manifest_items.append(future.result())
-
-        runtime = time.monotonic() - t0
         
-        return self._build_manifest(manifest_items), runtime
+        return self._build_manifest(manifest_items)
 
     def _compute_hash(
         self, model_path: pathlib.Path, path: pathlib.Path

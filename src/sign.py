@@ -14,18 +14,13 @@
 
 """Script to sign models."""
 
-import sys
 import argparse
 import logging
 import pathlib
 
+from .model_signing.hashing import hashing, file, state
+from .model_signing.serialization import serialize_by_file, serialize_by_state
 from .model_signing import model
-from .model_signing.hashing import hashing
-from .model_signing.hashing import file
-from .model_signing.hashing import state
-from .model_signing.hashing import memory
-from .model_signing.serialization import serialize_by_file
-from .model_signing.serialization import serialize_by_state
 from .model_signing.signature import fake
 from .model_signing.signature import key
 from .model_signing.signature import pki
@@ -33,57 +28,9 @@ from .model_signing.signing import in_toto
 from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-
-import torch
-import time
-from cuda.bindings import driver, nvrtc, runtime
-import numpy as np
-from enum import Enum
-import os
+from .compile import HashType, Topology, InputType, compile_hasher
 
 log = logging.getLogger(__name__)
-
-
-def _cudaGetErrorEnum(error):
-    if isinstance(error, driver.CUresult):
-        err, name = driver.cuGetErrorName(error)
-        return name if err == driver.CUresult.CUDA_SUCCESS else "<unknown>"
-    elif isinstance(error, nvrtc.nvrtcResult):
-        return nvrtc.nvrtcGetErrorString(error)[1]
-    else:
-        raise RuntimeError('Unknown error type: {}'.format(error))
-
-
-def checkCudaErrors(result):
-    if result[0].value:
-        raise RuntimeError("CUDA error code={}({})".format(result[0].value,
-            _cudaGetErrorEnum(result[0])))
-    if len(result) == 1:
-        return None
-    elif len(result) == 2:
-        return result[1]
-    else:
-        return result[1:]
-
-
-class HashType(Enum):
-    SHA256  = ('sha256.cuh', 32, memory.SHA256)
-    BLAKE2B = ('blake2b.cuh', 64, memory.BLAKE2)
-    SHA3    = ('sha3.cuh', 64, memory.SHA3)
-    LATTICE = ('ltHash.cuh', 64)
-
-class Topology(Enum):
-    SERIAL = 1
-    MERKLE = 2
-    HOMOMORPHIC = 3
-
-class InputType(Enum):
-    """
-    FILE mode uses Hashlib/Sigstore, MODULE or DIGEST mode uses Sentry
-    """
-    FILE = 1
-    MODULE = 2
-    DIGEST = 3
 
 
 def _arguments() -> argparse.Namespace:
@@ -174,13 +121,22 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _get_payload_signer(args: argparse.Namespace) -> signing.Signer:
+def _get_payload_signer(args: argparse.Namespace, device='cpu', num_sigs=1) -> signing.Signer:
     if args.method == "private-key":
         _check_private_key_options(args)
+        signerHasher = None
+        if device == 'gpu':
+            signerHasher = compile_hasher(HashType.SHA256, Topology.MERKLE, InputType.MODULE)
         payload_signer = key.ECKeySigner.from_path(
-            private_key_path=args.key_path
-        )
-        return in_toto_signature.IntotoSigner(payload_signer)
+            key_path=args.key_path,
+            device=device,
+            num_sigs=num_sigs,
+            hasher=signerHasher)
+        if device == 'cpu':
+            return in_toto_signature.IntotoSigner(payload_signer)
+        elif device == 'gpu':
+            return in_toto_signature.IntotoSigner(payload_signer)
+
     elif args.method == "pki":
         _check_pki_options(args)
         payload_signer = pki.PKISigner.from_path(
@@ -223,108 +179,24 @@ def _check_pki_options(args: argparse.Namespace):
         log.warning("No certificate chain provided")
 
 
-def compile_cuda(srcPath, function_names):
-    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
-    ctx = checkCudaErrors(driver.cuCtxGetCurrent())
-    if repr(ctx) == '<CUcontext 0x0>':
-        ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
-    # get device arch
-    major = checkCudaErrors(driver.cuDeviceGetAttribute(
-        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR,
-        cuDevice))
-    minor = checkCudaErrors(driver.cuDeviceGetAttribute(
-        driver.CUdevice_attribute.CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR,
-        cuDevice))
-    arch_arg = bytes(f'--gpu-architecture=compute_{major}{minor}', 'ascii')
-
-    inclPath = os.path.dirname(srcPath)
-    opts = [
-            b'--fmad=false', arch_arg,
-            b'-I' + inclPath.encode(),
-            b'-I/usr/local/cuda/include',
-        ]
-
-    with open(srcPath, 'r') as f:
-        code = f.read()
-    # parse cuda code from file
-    prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), 
-        bytes(srcPath[-1], 'utf-8'), 0, [], []))
-    
-    # compile code into program and extract ptx
-    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
-    if err[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
-        logSize = checkCudaErrors(nvrtc.nvrtcGetProgramLogSize(prog))
-        log = bytes(logSize)
-        checkCudaErrors(nvrtc.nvrtcGetProgramLog(prog, log))
-        print(log.decode("utf-8"), flush=True)
-        checkCudaErrors(err)
-
-    ptxSize = checkCudaErrors(nvrtc.nvrtcGetPTXSize(prog))
-    ptx = b' ' * ptxSize
-    checkCudaErrors(nvrtc.nvrtcGetPTX(prog, ptx))
-    ptx = np.char.array(ptx)
-    # obtain global functions as entrypoints into gpu
-    module = checkCudaErrors(driver.cuModuleLoadData(ptx.ctypes.data))
-    funcs = []
-    for func in function_names:
-        funcs.append(checkCudaErrors(driver.cuModuleGetFunction(module,
-            bytes(f'{func}', 'utf-8'))))
-    return ctx, funcs
-
-
-def compile_cuda_hasher(hashType: HashType, topology: Topology, inputType: InputType):
-    digestSize = hashType.value[1]
-    srcPath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                        'model_signing', 'cuda', hashType.value[0])
-
-    if topology == Topology.SERIAL:
-        ctx, [seq] = compile_cuda(srcPath, [f'seq'])
-        hasher = memory.SeqGPU(seq, ctx, digestSize)
-
-    elif topology == Topology.MERKLE:
-        ctx, [hashB, reduce] = compile_cuda(srcPath, ['hash', 'reduce'])
-        hasher = memory.MerkleGPU(hashB, reduce, ctx, digestSize)
-
-    elif topology == Topology.HOMOMORPHIC:
-        if hashType != HashType.LATTICE:
-            raise RuntimeError('Homomorphic Hashing must use Lattice Hashing')
-        if inputType == InputType.MODULE:
-            ctx, [hashB, reduce] = compile_cuda(srcPath, ['hash_ltHash', 'reduce_ltHash'])
-            hasher = memory.HomomorphicGPU(hashB, reduce, ctx, digestSize)
-        elif inputType == InputType.DIGEST:
-            ctx, [hashB, reduce] = compile_cuda(srcPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
-            hasher = memory.HomomorphicGPU(hashB, reduce, ctx, digestSize)
-
-    if not hasher:
-        raise RuntimeError('Failed to build hasher due to invalid arguments')
-
-    return hasher
-
-
-def build(hashType: HashType, topology: Topology, inputType: InputType, hasher=None, num_sigs=None):
-    # early compilation of cuda modules
-    if not hasher and inputType is not InputType.FILE:
-        hasher = compile_cuda_hasher(hashType, topology, inputType)
+def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs=1):
+    if inputType is not InputType.FILE:
+        hasher = compile_hasher(hashType, topology, inputType)
 
     args = _arguments()
-
-    if inputType is not InputType.FILE:
-        signerHasher = compile_cuda_hasher(HashType.SHA256, Topology.SERIAL, InputType.MODULE)
-        signer = key.ECKeyGPUSigner.from_path(args.key_path, hasher=signerHasher, num_sigs=num_sigs)
-        payload_signer = in_toto_signature.IntotoBatchSigner(signer)
-    else:
-        payload_signer = _get_payload_signer(args)
+    dev = 'cpu' if inputType == InputType.FILE else 'gpu'
+    payload_signer = _get_payload_signer(args, dev, num_sigs)
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(
             state_hasher_factory=None)
     
     elif inputType == InputType.FILE:
-            def hasher_factory(item) -> hashing.HashEngine:
-                return file.SimpleFileHasher(
-                    file=item, content_hasher=hashType.value[2]())
-            serializer = serialize_by_file.ManifestSerializer(
-                file_hasher_factory=hasher_factory)
+        def hasher_factory(item) -> hashing.HashEngine:
+            return file.SimpleFileHasher(
+                file=item, content_hasher=hashType.value[2]())
+        serializer = serialize_by_file.ManifestSerializer(
+            file_hasher_factory=hasher_factory)
 
     elif inputType == InputType.MODULE:
         def hasher_factory(item) -> hashing.HashEngine:
@@ -332,14 +204,14 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, hasher=N
         serializer = serialize_by_state.ManifestSerializer(
             state_hasher_factory=hasher_factory)
 
-    return payload_signer, serializer
+    return hasher, payload_signer, serializer
 
 
 # item to pass in differs depending on inputType
 # InputType.FILE   : directory path containing model files
 # InputType.MODULE : loaded PyTorch model of type torch.nn.Module
 # InputType.DIGEST : hash digest of type hashing.Digest. This skips hashing.
-def sign(item, payload_signer, serializer, inputType: InputType):
+def sign_item(item, payload_signer, serializer, inputType: InputType):
     args = _arguments()
 
     if inputType == InputType.FILE:
@@ -348,60 +220,64 @@ def sign(item, payload_signer, serializer, inputType: InputType):
         item = item.to('cuda').state_dict()
 
     if inputType == InputType.DIGEST:
-        sigs = model.sign_hash(item, payload_signer,
-            in_toto.DigestsIntotoPayload.from_manifest, serializer)
-        for sig in sigs:
-            sig.write(args.sig_out)
+        sigs = model.sign(
+            item=item,
+            signer=payload_signer,
+            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+            serializer=serializer,
+            skipHash=True,
+        )
     else:
-        sig = model.sign(
+        sigs = model.sign(
             item=item,
             signer=payload_signer,
             payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
             serializer=serializer,
             ignore_paths=[args.sig_out],
         )
+    for sig in sigs:
         sig.write(args.sig_out)
 
 
-if __name__ == "__main__":
-    PATH = './model.pth'
-    models = [
-        ('pytorch/vision:v0.10.0', 'resnet152'),
-        ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-        ('pytorch/vision:v0.10.0', 'vgg19'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-        ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
-    ]
+# if __name__ == "__main__":
+#     PATH = './model.pth'
+#     models = [
+#         ('pytorch/vision:v0.10.0', 'resnet152'),
+#         ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
+#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
+#         ('pytorch/vision:v0.10.0', 'vgg19'),
+#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
+#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
+#     ]
 
-    for m in models:
-        if len(m) == 2:
-            net = torch.hub.load(m[0], m[1], pretrained=True)
-        elif len(m) == 3:
-            net = torch.hub.load(m[0], m[1], m[2])
+#     for m in models:
+#         if len(m) == 2:
+#             net = torch.hub.load(m[0], m[1], pretrained=True)
+#         elif len(m) == 3:
+#             net = torch.hub.load(m[0], m[1], m[2])
 
-        print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
-        t0 = time.monotonic()
-        torch.save(net, PATH)
-        t1 = time.monotonic()
-        print(f'Write to file: {1000*(t1-t0):.2f} ms')
+#         print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
+#         t0 = time.monotonic()
+#         torch.save(net, PATH)
+#         t1 = time.monotonic()
+#         print(f'Write to file: {1000*(t1-t0):.2f} ms')
 
-        # t0 = time.monotonic()
-        # torch.load(PATH, weights_only=False)
-        # t1 = time.monotonic()
-        # print(f'Read from file: {1000*(t1-t0):.2f} ms')
+#         t0 = time.monotonic()
+#         torch.load(PATH, weights_only=False)
+#         t1 = time.monotonic()
+#         print(f'Read from file: {1000*(t1-t0):.2f} ms')
 
-        for hashType in HashType:
-            # print(f'CPU Hashing from file using {hashType.name}')
-            # sign(PATH, hashType, Topology.SERIAL, InputType.FILE)
+#         for hashType in HashType:
+#             print(f'CPU Hashing from file using {hashType.name}')
+#             sign_item(PATH, hashType, Topology.SERIAL, InputType.FILE)
 
-            # print(f'SeqGPU-{hashType.name}')
-            # sign(net, hashType, Topology.SERIAL, InputType.MODULE)
+#             print(f'SeqGPU-{hashType.name}')
+#             sign_item(net, hashType, Topology.SERIAL, InputType.MODULE)
 
-            print(f'MerkleGPU-{hashType.name}')
-            sign(net, hashType, Topology.MERKLE, InputType.MODULE)
+#             print(f'MerkleGPU-{hashType.name}')
+#             sign_item(net, hashType, Topology.MERKLE, InputType.MODULE)
 
-        print(f'HomomorphicGPU-lattice')
-        sign(net, HashType.LATTICE, Topology.HOMOMORPHIC, InputType.MODULE)
+#         print(f'HomomorphicGPU-lattice')
+#         sign_item(net, HashType.LATTICE, Topology.HOMOMORPHIC, InputType.MODULE)
         
-        del net
+#         del net

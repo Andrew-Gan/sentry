@@ -18,17 +18,17 @@ import argparse
 import logging
 import pathlib
 
-from model_signing import model
-from model_signing.hashing import file
-from model_signing.hashing import memory
-from model_signing.serialization import serialize_by_file
-from model_signing.signature import fake
-from model_signing.signature import key
-from model_signing.signature import pki
-from model_signing.signature import verifying
-from model_signing.signing import in_toto_signature
-from model_signing.signing import signing
-from model_signing.signing import sigstore
+from .model_signing.hashing import hashing, file, state
+from .model_signing.serialization import serialize_by_file, serialize_by_state
+from .model_signing import model
+from .model_signing.signature import fake
+from .model_signing.signature import key
+from .model_signing.signature import pki
+from .model_signing.signature import verifying
+from .model_signing.signing import in_toto, in_toto_signature
+from .model_signing.signing import signing
+from .model_signing.signing import sigstore
+from .compile import HashType, Topology, InputType, compile_hasher
 
 
 log = logging.getLogger(__name__)
@@ -97,12 +97,19 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _get_verifier(args: argparse.Namespace) -> signing.Verifier:
-    verifier: verifying.Verifier
+def _get_verifier(args: argparse.Namespace, device='cpu', num_sigs=1) -> signing.Verifier:
     if args.method == "private-key":
         _check_private_key_flags(args)
-        verifier = key.ECKeyVerifier.from_path(args.key)
-        return in_toto_signature.IntotoVerifier(verifier)
+        verifierHasher = None
+        if device == 'gpu':
+            verifierHasher = compile_hasher(HashType.SHA256, Topology.SERIAL, InputType.MODULE)
+
+        verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
+        if device == 'cpu':
+            return in_toto_signature.IntotoVerifier(verifier)
+        elif device == 'gpu':
+            return in_toto_signature.IntotoVerifier(verifier)
+
     elif args.method == "pki":
         _check_pki_flags(args)
         verifier = pki.PKIVerifier.from_paths(args.root_certs)
@@ -139,38 +146,62 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
         return in_toto_signature.IntotoSignature.read(args.sig_path)
 
 
-def main():
-    logging.basicConfig(level=logging.INFO)
+def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs=1):
+    if inputType is not InputType.FILE:
+        hasher = compile_hasher(hashType, topology, inputType)
+
     args = _arguments()
+    dev = 'cpu' if inputType == InputType.FILE else 'gpu'
+    verifier = _get_verifier(args, dev, num_sigs)
+    
+    if inputType == InputType.DIGEST:
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=None)
+    
+    elif inputType == InputType.FILE:
+        def hasher_factory(item) -> hashing.HashEngine:
+            return file.SimpleFileHasher(
+                file=item, content_hasher=hashType.value[2]())
+        serializer = serialize_by_file.ManifestSerializer(
+            file_hasher_factory=hasher_factory)
 
-    log.info(f"Creating verifier for {args.method}")
-    verifier = _get_verifier(args)
-    log.info(f"Verifying model signature from {args.sig_path}")
+    elif inputType == InputType.MODULE:
+        def hasher_factory(item) -> hashing.HashEngine:
+            return state.SimpleStateHasher(state=item, content_hasher=hasher)
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=hasher_factory)
 
+    return hasher, verifier, serializer
+
+
+def verify_item(item, verifier, serializer, inputType: InputType):
+    args = _arguments()
     sig = _get_signature(args)
 
-    def hasher_factory(file_path: pathlib.Path) -> file.FileHasher:
-        return file.SimpleFileHasher(
-            file=file_path, content_hasher=memory.SHA256()
-        )
-
-    serializer = serialize_by_file.ManifestSerializer(
-        file_hasher_factory=hasher_factory
-    )
+    if inputType == InputType.FILE:
+        item = pathlib.Path(item)
+    elif inputType == InputType.MODULE:
+        item = item.to('cuda').state_dict()
 
     try:
-        model.verify(
-            sig=sig,
-            verifier=verifier,
-            model_path=args.model_path,
-            serializer=serializer,
-            ignore_paths=[args.sig_path],
-        )
+        if inputType == InputType.DIGEST:
+            model.verify(
+                sig=sig,
+                item=item,
+                verifier=verifier,
+                serializer=serializer,
+                ignore_paths=[args.sig_path],
+                skipHash=True,
+            )
+        else:
+            model.verify(
+                sig=sig,
+                item=item,
+                verifier=verifier,
+                serializer=serializer,
+                ignore_paths=[args.sig_path],
+            )
     except verifying.VerificationError as err:
         log.error(f"verification failed: {err}")
 
     log.info("all checks passed")
-
-
-if __name__ == "__main__":
-    main()

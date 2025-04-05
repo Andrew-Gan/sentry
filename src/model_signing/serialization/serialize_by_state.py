@@ -27,7 +27,6 @@ from ..hashing import state
 from ..hashing import hashing
 from ..manifest import manifest
 from . import serialization
-import time
 
 
 def _build_header(*, entry_name: str) -> bytes:
@@ -98,17 +97,11 @@ class StateSerializer(serialization.Serializer):
             ValueError: The model contains a symbolic link, but the serializer
               was not initialized with `allow_symlinks=True`.
         """
-        t0 = time.monotonic()
 
-        digest = self._compute_hash(('state_dict', state))
-        manifest_items = [digest]
-
-        runtime = time.monotonic() - t0
-
-        return self._build_manifest(manifest_items), runtime
+        return self._build_manifest(self._compute_hash(state))
 
     def _compute_hash(
-        self, state: tuple[str, collections.OrderedDict]
+        self, state: collections.OrderedDict
     ) -> manifest.StateManifestItem:
         """Produces the manifest item of the state given by `path`.
 
@@ -120,8 +113,14 @@ class StateSerializer(serialization.Serializer):
         Returns:
             The itemized manifest.
         """
-        digest = self._hasher_factory(state[1]).compute()
-        return manifest.StateManifestItem(state=state[0], digest=digest)
+        digests = self._hasher_factory(state).compute()
+
+        self.hashes_d = []
+        manifestItems = []
+        for key, digest, hash in digests:
+            manifestItems.append(manifest.StateManifestItem(state=key, digest=digest))
+            self.hashes_d.append(hash)
+        return manifestItems
 
     @abc.abstractmethod
     def _build_manifest(

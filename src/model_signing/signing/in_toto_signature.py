@@ -58,22 +58,10 @@ class IntotoSigner(signing.Signer):
         self._sig_signer = sig_signer
 
     @override
-    def sign(self, payload: signing.SigningPayload) -> IntotoSignature:
-        if not isinstance(payload, in_toto.IntotoPayload):
-            raise TypeError("only IntotoPayloads are supported")
-        bundle = self._sig_signer.sign(payload.statement)
-        return IntotoSignature(bundle)
-
-
-class IntotoBatchSigner(signing.Signer):
-    def __init__(self, sig_signer: signature_signing.Signer):
-        self._sig_signer = sig_signer
-
-    @override
-    def sign(self, payload: list[signing.SigningPayload]) -> IntotoSignature:
+    def sign(self, payload: list[signing.SigningPayload], hashes_d=None) -> list[IntotoSignature]:
         if not isinstance(payload[0], in_toto.IntotoPayload):
-            raise TypeError("only list[IntotoPayloads] are supported")
-        bundles = self._sig_signer.sign([p.statement for p in payload])
+            raise TypeError("only list of IntotoPayloads are supported")
+        bundles = self._sig_signer.sign([p.statement for p in payload], hashes_d)
         return [IntotoSignature(bundle) for bundle in bundles]
 
 
@@ -82,8 +70,8 @@ class IntotoVerifier(signing.Verifier):
         self._sig_verifier = sig_verifier
 
     @override
-    def verify(self, signature: signing.Signature) -> manifest_module.Manifest:
-        if not isinstance(signature, IntotoSignature):
-            raise TypeError("only IntotoSignature is supported")
-        self._sig_verifier.verify(signature._bundle)
-        return signature.to_manifest()
+    def verify(self, signatures: list[signing.Signature]) -> list[manifest_module.Manifest]:
+        if not isinstance(signatures[0], IntotoSignature):
+            raise TypeError("only list of IntotoSignature is supported")
+        [self._sig_verifier.verify(sig._bundle) for sig in signatures]
+        return [sig.to_manifest() for sig in signatures]

@@ -677,15 +677,65 @@ __global__ void kernel_sig_verify(cgbn_error_report_t *report, verify_ins_t *ins
 }
 
 // global variables
+bool isInit = false;
 int TPB, TPI, IPB;
 ec_t sm2;
-sign_ins_t *d_sign_ins;
-verify_ins_t *d_verify_ins[MAX_SIG];
-int32_t *d_results[MAX_SIG];
+sign_ins_t *d_sign_ins = nullptr;
+verify_ins_t *d_verify_ins;
+int *results;
+int32_t *d_results;
 cgbn_error_report_t *report;
 
 extern "C"
 void sign_init(int num_sigs) {
+    if (isInit) return;
+
+    typedef gsv_params_t<GSV_TPI> params;
+    TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
+    TPI = params::TPI;
+    IPB = TPB / TPI;  // IPB: instances per block
+
+    set_words(sm2.order._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", GSV_BITS / 32);
+    set_words(sm2.field._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", GSV_BITS / 32);
+#ifndef GSV_SM2
+    set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
+#endif
+
+    CUDA_CHECK(cudaMalloc(&d_sign_ins, sizeof(sign_ins_t) * GSV_MAX_INS));
+    CUDA_CHECK(cgbn_error_report_alloc(&report));
+
+    cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
+
+    CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table,
+        sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+    free(mul_table);
+    isInit = true;
+}
+
+extern "C"
+gsv_sign_t* sign_exec(int num_sigs, gsv_sign_t *sig) {
+    typedef gsv_params_t<GSV_TPI> params;
+
+    CUDA_CHECK(cudaMemcpy(d_sign_ins, sig, num_sigs * sizeof(sign_ins_t), cudaMemcpyHostToDevice));
+    kernel_sig_sign<params><<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_sign_ins, num_sigs, sm2);
+
+    CUDA_CHECK(cudaDeviceSynchronize());
+    CGBN_CHECK(report);
+    CUDA_CHECK(cudaMemcpy(sig, d_sign_ins, sizeof(sign_ins_t) * num_sigs, cudaMemcpyDeviceToHost));
+
+    return sig;
+}
+
+extern "C"
+void sign_close() {
+    if (!isInit) return;
+    CUDA_CHECK(cudaFree(d_sign_ins));
+    CUDA_CHECK(cgbn_error_report_free(report));
+    isInit = false;
+}
+
+extern "C"
+void verify_init(int num_sigs) {
     typedef gsv_params_t<GSV_TPI> params;
 
     TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
@@ -698,98 +748,46 @@ void sign_init(int num_sigs) {
     set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
 #endif
 
-    CUDA_CHECK(cudaMalloc((void **)&d_sign_ins, sizeof(sign_ins_t) * GSV_MAX_INS));
+    results = new int[GSV_MAX_INS];
+    CUDA_CHECK(cudaMalloc((void **)&d_verify_ins, sizeof(verify_ins_t) * GSV_MAX_INS));
+    CUDA_CHECK(cudaMalloc((void **)&d_results, sizeof(int32_t) * GSV_MAX_INS));
     CUDA_CHECK(cgbn_error_report_alloc(&report));
 
     cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
+#ifdef GSV_KNOWN_PKEY
+    cgbn_mem_t<GSV_BITS> *mul_table2 = gsv_t<params>::prepare_table2();
+#endif
 
-    CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table,
-        sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+    CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+#ifdef GSV_KNOWN_PKEY
+    CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table2, mul_table2, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
+#endif
 
     free(mul_table);
+#ifdef GSV_KNOWN_PKEY
+    free(mul_table2);
+#endif
 }
 
 extern "C"
-gsv_sign_t* sign_exec(int num_sigs, gsv_sign_t *sig) {
+int* verify_exec(int num_sigs, gsv_verify_t *sig) {
     typedef gsv_params_t<GSV_TPI> params;
 
-    CUDA_CHECK(cudaMemcpy(d_sign_ins, sig, sizeof(sign_ins_t), cudaMemcpyHostToDevice));
-    kernel_sig_sign<params><<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_sign_ins, num_sigs, sm2);
+    CUDA_CHECK(cudaMemcpy(d_verify_ins, sig, sizeof(verify_ins_t) * num_sigs, cudaMemcpyHostToDevice));
+    kernel_sig_verify<params>
+        <<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_verify_ins, num_sigs, sm2, d_results);
 
     CUDA_CHECK(cudaDeviceSynchronize());
     CGBN_CHECK(report);
-    CUDA_CHECK(cudaMemcpy(sig, d_sign_ins, sizeof(sign_ins_t) * num_sigs, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(results, d_results, sizeof(int32_t) * num_sigs, cudaMemcpyDeviceToHost));
 
-    return sig;
+    return results;
 }
 
 extern "C"
-void sign_close(int num_sigs) {
-    CUDA_CHECK(cudaFree(d_sign_ins));
+void verify_close() {
+    delete[] results;
+    CUDA_CHECK(cudaFree(d_verify_ins));
+    CUDA_CHECK(cudaFree(d_results));
     CUDA_CHECK(cgbn_error_report_free(report));
 }
-
-// extern "C"
-// void verify_init(int num_sigs) {
-//     typedef gsv_params_t<GSV_TPI> params;
-
-//     TPB = (params::TPB == 0) ? 128 : params::TPB;  // default threads per block is 128
-//     TPI = params::TPI;
-//     IPB = TPB / TPI;  // IPB: instances per block
-
-//     set_words(sm2.order._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFF7203DF6B21C6052B53BBF40939D54123", GSV_BITS / 32);
-//     set_words(sm2.field._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFF", GSV_BITS / 32);
-// #ifndef GSV_SM2
-//     set_words(sm2.g_a._limbs, "FFFFFFFEFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF00000000FFFFFFFFFFFFFFFC", GSV_BITS / 32);
-// #endif
-
-//     for (int i = 0; i < num_sigs; i++) {
-//         CUDA_CHECK(cudaMalloc((void **)&d_verify_ins[i], sizeof(verify_ins_t) * GSV_MAX_INS));
-//         CUDA_CHECK(cudaMalloc((void **)&d_results[i], sizeof(int32_t) * GSV_MAX_INS));
-//         CUDA_CHECK(cgbn_error_report_alloc(&report));
-
-//         cgbn_mem_t<GSV_BITS> *mul_table = gsv_t<params>::prepare_table();
-// #ifdef GSV_KNOWN_PKEY
-//         cgbn_mem_t<GSV_BITS> *mul_table2 = gsv_t<params>::prepare_table2();
-// #endif
-
-//         CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table, mul_table, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
-// #ifdef GSV_KNOWN_PKEY
-//         CUDA_CHECK(cudaMemcpyToSymbol(d_mul_table2, mul_table2, sizeof(cgbn_mem_t<GSV_BITS>) * GSV_TABLE_SIZE));
-// #endif
-
-//         free(mul_table);
-// #ifdef GSV_KNOWN_PKEY
-//         free(mul_table2);
-// #endif
-//     }
-// }
-
-// extern "C"
-// void verify_exec(int num_sigs, int count, gsv_verify_t *sig, int *results) {
-//     typedef gsv_params_t<GSV_TPI> params;
-
-//     for (int i = 0; i < num_sigs; i++) {
-//         cudaMemcpyAsync(d_verify_ins[i], sig, sizeof(verify_ins_t) * count,
-//             cudaMemcpyHostToDevice, streams[i]);
-//         kernel_sig_verify<params>
-//             <<<(count + IPB - 1) / IPB, TPB>>>(report[i], d_verify_ins[i], count, sm2, d_results[i]);
-//     }
-
-//     for (int i = 0; i < num_sigs; i++) {
-//         CUDA_CHECK(cudaStreamSynchronize(streams[i]));
-//         CGBN_CHECK(report[i]);
-//         CUDA_CHECK(cudaMemcpy(results, d_results[i], sizeof(int32_t) * count,
-//             cudaMemcpyDeviceToHost));
-//     }
-// }
-
-// extern "C"
-// void verify_close(int num_sigs) {
-//     for (int i = 0; i < num_sigs; i++) {
-//         CUDA_CHECK(cudaStreamDestroy(streams[i]));
-//         CUDA_CHECK(cudaFree(d_verify_ins[i]));
-//         CUDA_CHECK(cudaFree(d_results[i]));
-//         CUDA_CHECK(cgbn_error_report_free(report[i]));
-//     }
-// }

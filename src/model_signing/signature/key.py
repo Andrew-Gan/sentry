@@ -31,83 +31,13 @@ from .verifying import VerificationError
 from .verifying import Verifier
 import ctypes
 import torch
-
-
-def load_ec_private_key(
-    path: str, password: str | None = None
-) -> ec.EllipticCurvePrivateKey:
-    private_key: ec.EllipticCurvePrivateKey
-    with open(path, "rb") as fd:
-        serialized_key = fd.read()
-    private_key = load_pem_private_key(
-        serialized_key, password=password
-    )
-    return private_key
-
-
-class ECKeySigner(Signer):
-    """Provides a Signer using an elliptic curve private key for signing."""
-
-    def __init__(self, private_key: ec.EllipticCurvePrivateKey):
-        self._private_key = private_key
-
-    @classmethod
-    def from_path(cls, private_key_path: str, password: str | None = None):
-        private_key = load_ec_private_key(private_key_path, password)
-        return cls(private_key)
-
-    def sign(self, stmnt: statement.Statement) -> bundle_pb.Bundle:
-        pae = encoding.pae(stmnt.pb)
-        sig = self._private_key.sign(pae, ec.ECDSA(SHA256()))
-        env = intoto_pb.Envelope(
-            payload=json_format.MessageToJson(stmnt.pb).encode(),
-            payload_type=encoding.PAYLOAD_TYPE,
-            signatures=[intoto_pb.Signature(sig=sig, keyid=None)],
-        )
-        bdl = bundle_pb.Bundle(
-            media_type="application/vnd.dev.sigstore.bundle.v0.3+json",
-            verification_material=bundle_pb.VerificationMaterial(
-                public_key=common_pb.PublicKey(
-                    raw_bytes=self._private_key.public_key().public_bytes(
-                        encoding=Encoding.PEM,
-                        format=PublicFormat.SubjectPublicKeyInfo,
-                    ),
-                    key_details=common_pb.PublicKeyDetails.PKIX_ECDSA_P256_SHA_256,
-                )
-            ),
-            dsse_envelope=env,
-        )
-
-        return bdl
-
-
-class ECKeyVerifier(Verifier):
-    """Provides a verifier using a public key."""
-
-    def __init__(self, public_key: ec.EllipticCurvePublicKey):
-        self._public_key = public_key
-
-    @classmethod
-    def from_path(cls, key_path: str):
-        with open(key_path, "rb") as fd:
-            serialized_key = fd.read()
-        public_key = load_pem_public_key(serialized_key)
-        return cls(public_key)
-
-    def verify(self, bundle: bundle_pb.Bundle) -> None:
-        statement = json_format.Parse(
-            bundle.dsse_envelope.payload,
-            statement_pb.Statement(),  # pylint: disable=no-member
-        )
-        pae = encoding.pae(statement)
-        try:
-            self._public_key.verify(
-                bundle.dsse_envelope.signatures[0].sig, pae, ec.ECDSA(SHA256())
-            )
-        except Exception as e:
-            raise VerificationError(
-                "signature verification failed " + str(e)
-            ) from e
+import re
+import numpy as np
+import cupy as cp
+from ..cuda import utils
+from cuda.bindings import driver
+from ..cuda.utils import checkCudaErrors
+import os
 
 
 class gsv_params_t(ctypes.Structure):
@@ -130,58 +60,133 @@ class gsv_sign_t(ctypes.Structure):
                 ("s",           gsv_mem_t),]
 
 
-class ECKeyGPUSigner(Signer):
+class gsv_verify_t(ctypes.Structure):
+    _fields_ = [("r",           gsv_mem_t),
+                ("s",           gsv_mem_t),
+                ("e",           gsv_mem_t),
+                ("key_x",       gsv_mem_t),
+                ("key_y",       gsv_mem_t),]
+
+
+def load_ec_private_key(
+    path: str, password: str | None = None
+) -> ec.EllipticCurvePrivateKey:
+    private_key: ec.EllipticCurvePrivateKey
+    with open(path, "rb") as fd:
+        serialized_key = fd.read()
+    private_key = load_pem_private_key(
+        serialized_key, password=password
+    )
+    return private_key
+
+
+class ECKeySigner(Signer):
     """Provides a Signer using an elliptic curve private key for signing."""
 
-    def __init__(self, private_key: ec.EllipticCurvePrivateKey, num_sigs, hasher):
+    def __init__(self, private_key: ec.EllipticCurvePrivateKey, device='cpu',
+                 num_sigs=1, hasher=None):
+
         self._private_key = private_key
+        self._device = device
         self._num_sigs = num_sigs
-        self.gsv = ctypes.CDLL('./RapidEC/gsv.so')
-        self.gsv.sign_init.argtypes = [ctypes.c_int]
-        self.gsv.sign_init.restype = None
-        self.gsv.sign_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_sign_t)]
-        self.gsv.sign_exec.restype = ctypes.POINTER(gsv_sign_t)
-        self.gsv.sign_close.argtypes = [ctypes.c_int]
-        self.gsv.sign_close.restype = None
 
-        self.gsv.sign_init(self._num_sigs)
-        self._hasher = hasher
+        if device == 'gpu':
+            self._gsv = ctypes.CDLL('./RapidEC/gsv.so')
+            self._gsv.sign_init.argtypes = [ctypes.c_int]
+            self._gsv.sign_init.restype = None
+            self._gsv.sign_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_sign_t)]
+            self._gsv.sign_exec.restype = ctypes.POINTER(gsv_sign_t)
+            self._gsv.sign_close.argtypes = []
+            self._gsv.sign_close.restype = None
 
-    def __del__(self):
-        self.gsv.sign_close(self._num_sigs)
+            self._gsv.sign_init(self._num_sigs)
+            self._hasher = hasher
+
+            path = os.path.join(os.sep, 'home', 'src', 'model_signing', 'cuda',
+                                'binToHex.cuh')
+            self._ctx, [self._binToHex] = utils.compile(path, ['binToHex'])
+
+    def __exit__(self):
+        if self._device == 'gpu':
+            self._gsv.sign_close(self._num_sigs)
 
     @classmethod
-    def from_path(cls, private_key_path: str, password: str=None, num_sigs=1, hasher=None):
-        private_key = load_ec_private_key(private_key_path, password)
-        return cls(private_key, num_sigs, hasher)
+    def from_path(cls, key_path: str, password: str = None, device='cpu',
+                  num_sigs=1, hasher=None):
+        private_key = load_ec_private_key(key_path, password)
+        return cls(private_key, device, num_sigs, hasher)
 
-    def sign(self, stmnts: list[statement.Statement]) -> bundle_pb.Bundle:
+    def _gpu_convert_bin_to_hex(self, hashes_d):
+        n = len(hashes_d)
+        hash_bin_d = cp.ndarray([n, 64])
+        hash_hex_d = cp.ndarray([n, 128])
+        for i, hash_d in enumerate(hashes_d):
+            hash_bin_d[i] = hash_d
+        hex_in = np.array([hash_bin_d.data.ptr], dtype=np.uint64)
+        hex_out = np.array([hash_hex_d.data.ptr], dtype=np.uint64)
+        args = [hex_in, hex_out]
+        args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+        stream = checkCudaErrors(driver.cuStreamCreate(0))
+
+        print(type(self._ctx), type(self._binToHex), flush=True)
+        checkCudaErrors(driver.cuCtxSetCurrent(self._ctx))
+        checkCudaErrors(driver.cuLaunchKernel(
+            self._binToHex, 1, 1, 1, 64, n, 1, 0, stream, args.ctypes.data, 0
+        ))
+        checkCudaErrors(driver.cuStreamSynchronize(stream))
+        checkCudaErrors(driver.cuStreamDestroy(stream))
+        return hash_hex_d
+
+    def sign(self, stmnts: list[statement.Statement], hashes_d=None) -> list[bundle_pb.Bundle]:
         sign_tasks = []
+        bundles = []
+        paes = []
 
         for stmnt in stmnts:
             pae = encoding.pae(stmnt.pb)
-            pae_d = torch.frombuffer(bytearray(pae), dtype=torch.uint8).cuda()
-            self._hasher.update({'pae': pae_d}, len(pae))
-            digest = self._hasher.compute().digest_value
-            priv_key = self._private_key.private_numbers().private_value.to_bytes(32)
-            sign_tasks.append(gsv_sign_t(
-                e=gsv_mem_t.from_buffer_copy(digest),
-                priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
+            if self._device == 'cpu':
+                paes.append(pae)
 
-        gsv_sign_arr_t = gsv_sign_t * self._num_sigs
-        sig_pending = gsv_sign_arr_t(*sign_tasks)
-        sig_completed = self.gsv.sign_exec(self._num_sigs, sig_pending)
+            if self._device == 'gpu':
+                hash_hex_d = self._gpu_convert_bin_to_hex(hashes_d)
 
-        bundles = []
-        for i in range(self._num_sigs):
-            sig = sig_completed[i]
-            r, s = int.from_bytes(sig.r), int.from_bytes(sig.s)
-            sig_encoded = utils.encode_dss_signature(r, s)
+                dummy_pos = [m.start() for m in re.finditer(b'0'*128, pae)]
+                assert(len(dummy_pos) == len(hashes_d))
+                pae_d = cp.frombuffer(pae, dtype=cp.uint8)
+                for i, pos in enumerate(dummy_pos):
+                    driver.cuMemcpy(pae_d+pos, hash_hex_d[i].data.ptr, 128)
 
+                # debug
+                tmp = bytearray(len(pae))
+                driver.cuMemcpy(tmp, pae_d, len(pae))
+                print(tmp)
+
+                paes.append(pae_d)
+        
+        return
+
+        if self._device == 'cpu':
+            sigs = [self._private_key.sign(pae, ec.ECDSA(SHA256())) for pae in paes]
+        elif self._device == 'gpu':
+            for pae in enumerate(paes):
+                self._hasher.update({'pae': pae}, len(pae))
+                digest = self._hasher.compute().digest_value
+                priv_key = self._private_key.private_numbers().private_value.to_bytes(32)
+                sign_tasks.append(gsv_sign_t(
+                    e=gsv_mem_t.from_buffer_copy(digest),
+                    priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
+
+            sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
+            sigs_uncoded = self._gsv.sign_exec(self._num_sigs, sig_pending)
+            sigs_uncoded = ctypes.cast(sigs_uncoded, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
+            rsPair = [(int.from_bytes(sig.r), int.from_bytes(sig.s)) for sig in sigs_uncoded.contents]
+            sigs = [utils.encode_dss_signature(rs[0], rs[1]) for rs in rsPair]
+
+        for stmnt, sig in zip(stmnts, sigs):
             env = intoto_pb.Envelope(
                 payload=json_format.MessageToJson(stmnt.pb).encode(),
                 payload_type=encoding.PAYLOAD_TYPE,
-                signatures=[intoto_pb.Signature(sig=sig_encoded, keyid=None)],
+                signatures=[intoto_pb.Signature(sig=sig, keyid=None)],
             )
             bundles.append(bundle_pb.Bundle(
                 media_type="application/vnd.dev.sigstore.bundle.v0.3+json",
@@ -199,6 +204,76 @@ class ECKeyGPUSigner(Signer):
 
         return bundles
 
-# for use with verify
-# pub_x = self._private_key.private_numbers().public_numbers.x.to_bytes(32)
-# pub_y = self._private_key.private_numbers().public_numbers.y.to_bytes(32)
+
+class ECKeyVerifier(Verifier):
+    """Provides a verifier using a public key."""
+
+    def __init__(self, public_key: ec.EllipticCurvePublicKey, device='cpu',
+                 num_sigs=1, hasher=None):
+
+        self._public_key = public_key
+        self._device = device
+        self._num_sigs = num_sigs
+
+        if device == 'gpu':
+            self._gsv = ctypes.CDLL('./RapidEC/gsv.so')
+            self._gsv.verify_init.argtypes = [ctypes.c_int]
+            self._gsv.verify_init.restype = None
+            self._gsv.verify_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_sign_t)]
+            self._gsv.verify_exec.restype = ctypes.POINTER(ctypes.c_int)
+            self._gsv.verify_close.argtypes = []
+            self._gsv.verify_close.restype = None
+
+            self._gsv.verify_init(self._num_sigs)
+            self._hasher = hasher
+
+    def __exit__(self):
+        if self._device == 'gpu':
+            self._gsv.verify_close(self._num_sigs)
+
+    @classmethod
+    def from_path(cls, key_path: str, device='cpu', num_sigs=1, hasher=None):
+        with open(key_path, "rb") as fd:
+            serialized_key = fd.read()
+        public_key = load_pem_public_key(serialized_key)
+        return cls(public_key, device, num_sigs, hasher)
+
+    def verify(self, bundles: list[bundle_pb.Bundle]) -> None:
+        verify_tasks = []
+        paes = []
+        sigs = []
+        for bundle in bundles:
+            statement = json_format.Parse(
+                bundle.dsse_envelope.payload,
+                statement_pb.Statement(),  # pylint: disable=no-member
+            )
+            paes.append(encoding.pae(statement))
+            sigs.append(bundle.dsse_envelope.signatures[0].sig)
+
+        if self._device == 'cpu':
+            try:
+                [self._public_key.verify(sig, pae, ec.ECDSA(SHA256()))
+                 for pae, sig in zip(paes, sigs)]
+            except Exception as e:
+                raise VerificationError(
+                    "signature verification failed " + str(e)
+                ) from e
+        elif self._device == 'gpu':
+            for pae, sig in zip(paes, sigs):
+                pae_d = torch.frombuffer(bytearray(pae), dtype=torch.uint8).cuda()
+                self._hasher.update({'pae': pae_d}, len(pae))
+                digest = self._hasher.compute().digest_value
+                pub_x = self._public_key.public_numbers().x.to_bytes(32)
+                pub_y = self._public_key.public_numbers().y.to_bytes(32)
+                r, s = utils.decode_dss_signature(sig)
+                verify_tasks.append(gsv_verify_t(
+                    r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
+                    s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
+                    e=gsv_mem_t.from_buffer_copy(digest),
+                    key_x=gsv_mem_t.from_buffer_copy(pub_x),
+                    key_y=gsv_mem_t.from_buffer_copy(pub_y),
+                ))
+            ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
+            results = self._gsv.verify_exec(self._num_sigs, ver_pending)
+            results = list(results)
+            print(results)
