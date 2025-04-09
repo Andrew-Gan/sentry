@@ -31,13 +31,13 @@ if __name__ == '__main__':
     dataloader = get_image_dataloader(data_path, meta_path, batch, device, gds)
     # dataloader = get_text_dataloader(data_path, meta_path, batch, device, gds)
 
-    # start = time.monotonic()
+    start = time.monotonic()
 
-    # for data in dataloader:
-    #     x, y = data[0]['data'], data[0]['label']
-    #     # pred = model(x)
+    for data in dataloader:
+        x, y = data[0]['data'], data[0]['label']
+        # pred = model(x)
 
-    # print(f'[Trainer] Model Training: {(time.monotonic()-start)*1000:.2f} ms\n', flush=True)
+    print(f'[Trainer] Model Training: {(time.monotonic()-start)*1000:.2f} ms\n', flush=True)
     start = time.monotonic()
 
     if device == 'cpu':
@@ -48,13 +48,13 @@ if __name__ == '__main__':
     print(f'[Trainer] Model Signing: {(time.monotonic()-start)*1000:.2f} ms\n', flush=True)
     start = time.monotonic()
 
-    # if device == 'cpu':
-    #     sign.sign_item(dataset_path, signer_dataset, serializer_dataset, InputType.FILE)
-    # elif device == 'gpu':
-    #     sign.sign_item(hash_batch.hasher.compute(), signer_dataset, serializer_dataset, InputType.DIGEST)
+    if device == 'cpu':
+        sign.sign_item(dataset_path, signer_dataset, serializer_dataset, InputType.FILE)
+    elif device == 'gpu':
+        sign.sign_item(hash_batch.hasher.compute(), signer_dataset, serializer_dataset, InputType.DIGEST)
 
-    # print(f'[Trainer]: Dataset Signing: {(time.monotonic()-start)*1000:.2f} ms\n', flush=True)
+    print(f'[Trainer]: Dataset Signing: {(time.monotonic()-start)*1000:.2f} ms\n', flush=True)
 
-    # if device == 'gpu':
-    #     print('Hashes of different dataset sources')
-    #     print(hash_batch.hasher)
+    if device == 'gpu':
+        print('Hashes of different dataset sources')
+        print(hash_batch.hasher)

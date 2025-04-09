@@ -1,6 +1,10 @@
-# Model Transparency
+# Sentry
 
-<img align="right" src="https://slsa.dev/images/logo-mono.svg" width="140" height="140">
+An end-to-end GPU framework for authenticating machine learning artifacts.
+
+
+
+![](sentry.png "Sentry")
 
 <!-- markdown-toc --bullets="-" -i README.md -->
 
