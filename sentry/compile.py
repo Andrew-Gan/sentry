@@ -1,18 +1,18 @@
 from enum import Enum
 import os
 from .model_signing.hashing import memory
-from .model_signing.cuda import utils
+from .model_signing.cuda import mycuda
 
 class HashType(Enum):
     SHA256  = ('sha256.cuh', 32, memory.SHA256)
     BLAKE2B = ('blake2b.cuh', 64, memory.BLAKE2)
     SHA3    = ('sha3.cuh', 64, memory.SHA3)
-    LATTICE = ('ltHash.cuh', 64)
+    LATTICE = ('lattice.cuh', 64)
 
 class Topology(Enum):
     SERIAL = 1
     MERKLE = 2
-    HOMOMORPHIC = 3
+    HADD = 3
 
 class InputType(Enum):
     """
@@ -28,21 +28,21 @@ def compile_hasher(hashType: HashType, topology: Topology, inputType: InputType)
                         'model_signing', 'cuda', hashType.value[0])
 
     if topology == Topology.SERIAL:
-        ctx, [seq] = utils.compile(srcPath, [f'seq'])
+        ctx, [seq] = mycuda.compile(srcPath, [f'seq'])
         hasher = memory.SeqGPU(seq, ctx, digestSize)
 
     elif topology == Topology.MERKLE:
-        ctx, [hashB, reduce] = utils.compile(srcPath, ['hash', 'reduce'])
+        ctx, [hashB, reduce] = mycuda.compile(srcPath, ['hash', 'reduce'])
         hasher = memory.MerkleGPU(hashB, reduce, ctx, digestSize)
 
-    elif topology == Topology.HOMOMORPHIC:
+    elif topology == Topology.HADD:
         if hashType != HashType.LATTICE:
             raise RuntimeError('Homomorphic Hashing must use Lattice Hashing')
         if inputType == InputType.MODULE:
-            ctx, [hashB, reduce] = utils.compile(srcPath, ['hash_ltHash', 'reduce_ltHash'])
+            ctx, [hashB, reduce] = mycuda.compile(srcPath, ['hash_ltHash', 'reduce_ltHash'])
             hasher = memory.HomomorphicGPU(hashB, reduce, ctx, digestSize)
         elif inputType == InputType.DIGEST:
-            ctx, [hashB, reduce] = utils.compile(srcPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
+            ctx, [hashB, reduce] = mycuda.compile(srcPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
             hasher = memory.HomomorphicGPU(hashB, reduce, ctx, digestSize)
 
     if not hasher:

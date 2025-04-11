@@ -2,6 +2,8 @@ from nvidia.dali.pipeline import pipeline_def
 import nvidia.dali.fn as fn
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 import torch
+from sentry import compile
+from sentry.compile import HashType, Topology, InputType
 
 def hash_batch(data: list, metadata: list):
     partitions = {}
@@ -11,19 +13,22 @@ def hash_batch(data: list, metadata: list):
             partitions[src] = []
         partitions[src].append(sample)
     hash_batch.hasher.update_dataset(partitions, blockSize=data[0].nbytes)
+    hash_batch.hasher.counter += 1
 
 # TORCH HUB: load pretrained ML model and save to file
-def get_model(model_name: list, pretrained: bool, device: str):
+def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
     if len(model_name) == 2:
         model = torch.hub.load(model_name[0], model_name[1], pretrained=pretrained)
     elif len(model_name) == 3:
-        model = torch.hub.load(model_name[0], model_name[1], model_name[2], pretrained=pretrained)
+        model = torch.hub.load(model_name[0], model_name[1], model_name[2])
 
     modelPath = './model.pth'
     torch.save(model, modelPath)
     return model.to('cuda' if device=='gpu' else device), modelPath
 
 def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
+    hash_batch.hasher = compile.compile_hasher(HashType.LATTICE, Topology.HADD, InputType.DIGEST)
+    
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_images():
         data = fn.readers.numpy(file_root=data_path, random_shuffle=True,
@@ -55,9 +60,11 @@ def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str
         reader_name='Reader1'
     )
 
-    return dali_loader
+    return dali_loader, hash_batch.hasher
 
 def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
+    hash_batch.hasher = compile.compile_hasher(HashType.LATTICE, Topology.HADD, InputType.DIGEST)
+
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_texts():
         data = fn.readers.numpy(file_root=data_path, random_shuffle=True,
@@ -77,11 +84,10 @@ def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str,
 
         return data, metadata
 
-    print(f'Batch: {batch}, DALI: {device}', flush=True)
     dali_loader = DALIGenericIterator(
         [get_dali_pipeline_texts(batch_size=batch)],
         ['data', 'label'],
         reader_name='Reader1'
     )
 
-    return dali_loader
+    return dali_loader, hash_batch.hasher

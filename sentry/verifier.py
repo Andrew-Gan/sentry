@@ -17,6 +17,7 @@
 import argparse
 import logging
 import pathlib
+import torch
 
 from .model_signing.hashing import hashing, file, state
 from .model_signing.serialization import serialize_by_file, serialize_by_state
@@ -174,33 +175,45 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
     return hasher, verifier, serializer
 
 
-def verify_item(item, verifier, serializer, inputType: InputType):
+def verify_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     args = _arguments()
     sig = _get_signature(args)
-
-    if inputType == InputType.FILE:
+    if isinstance(item, str):
+        _, verifier, serializer = build(hashType, topology, InputType.FILE)
         item = pathlib.Path(item)
-    elif inputType == InputType.MODULE:
+    elif isinstance(item, torch.nn.Module):
+        _, verifier, serializer = build(hashType, topology, InputType.MODULE)
         item = item.to('cuda').state_dict()
+    else:
+        raise TypeError('item is neither str nor torch module')
 
     try:
-        if inputType == InputType.DIGEST:
-            model.verify(
-                sig=sig,
-                item=item,
-                verifier=verifier,
-                serializer=serializer,
-                ignore_paths=[args.sig_path],
-                skipHash=True,
-            )
-        else:
-            model.verify(
-                sig=sig,
-                item=item,
-                verifier=verifier,
-                serializer=serializer,
-                ignore_paths=[args.sig_path],
-            )
+        model.verify(
+            sig=sig,
+            item=item,
+            verifier=verifier,
+            serializer=serializer,
+            ignore_paths=[args.sig_path],
+        )
+    except verifying.VerificationError as err:
+        log.error(f"verification failed: {err}")
+
+    log.info("all checks passed")
+
+
+def verify_dataset(item, hashType=HashType.LATTICE, topology=Topology.HADD):
+    _, verifier, serializer = build(hashType, topology, InputType.DIGEST)
+    args = _arguments()
+    sig = _get_signature(args)
+    try:
+        model.verify(
+            sig=sig,
+            item=item,
+            verifier=verifier,
+            serializer=serializer,
+            ignore_paths=[args.sig_path],
+            isDigest=True,
+        )
     except verifying.VerificationError as err:
         log.error(f"verification failed: {err}")
 

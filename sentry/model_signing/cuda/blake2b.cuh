@@ -212,14 +212,14 @@ void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
 extern "C" __global__
 void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
     BLAKE2B_CTX ctx;
-    merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 64UL);
+    merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 32UL);
 }
 
 extern "C" __global__
 void reduce(uint8_t *out, uint8_t *in, size_t n) {
 	extern __shared__ uint8_t shMem[];
     BLAKE2B_CTX ctx;
-	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 64UL);
+	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 32UL);
 }
 
 #endif

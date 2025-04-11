@@ -36,7 +36,7 @@ def sign(
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
-    skipHash: bool = False,
+    isDigest: bool = False,
 ) -> signing.Signature:
     """Provides a wrapper function for the steps necessary to sign a model.
 
@@ -51,18 +51,24 @@ def sign(
     Returns:
         The model's signature.
     """
-    items = item if isinstance(item, list) else [item]
 
-    payload = []
-    for item in items:
-        if skipHash:
-            manifestItem = manifest.StateManifestItem(state=item[0], digest=item[1])
+    stmnts = []
+    hashes = []
+    if isDigest:
+        for i in range(len(item)):
+            value = item[i]
+            manifestItem = manifest.StateManifestItem(
+                state=item[0], digest=value[0])
             manif = serializer._build_manifest([manifestItem])
-        else:
+            stmnts.append(payload_generator(manif))
+            hashes.append([value[1]])
+    else:
+        items = item if isinstance(item, list) else [item]
+        for item in items:
             manif = serializer.serialize(item, ignore_paths=ignore_paths)
-        payload.append(payload_generator(manif))
-
-    return signer.sign(payload, hashes_d=serializer.hashes_d if hasattr(serializer, 'hashes_d') else None)
+            stmnts.append(payload_generator(manif))
+            hashes.append(serializer.hashes_d if hasattr(serializer, 'hashes_d') else None)
+    return signer.sign(stmnts, hashes)
 
 
 def verify(
@@ -71,7 +77,7 @@ def verify(
     item: pathlib.Path | collections.OrderedDict | Iterable[hashing.Digest],
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
-    skipHash: bool = False,
+    isDigest: bool = False,
 ):
     """Provides a simple wrapper to verify models.
 
@@ -91,7 +97,7 @@ def verify(
 
     peer_manifest = verifier.verify(sigs)
     for i, (item, sig) in enumerate(zip(items, sigs)):
-        if skipHash:
+        if isDigest:
             manifestItem = manifest.StateLevelManifest(state=i, digest=item)
             local_manifest = serializer._build_manifest([manifestItem])
         else:

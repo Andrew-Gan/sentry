@@ -34,9 +34,9 @@ import torch
 import re
 import numpy as np
 import cupy as cp
-from ..cuda import utils
+from ..cuda import mycuda
 from cuda.bindings import driver
-from ..cuda.utils import checkCudaErrors
+from ..cuda.mycuda import checkCudaErrors
 import os
 
 
@@ -94,7 +94,8 @@ class ECKeySigner(Signer):
             self._gsv = ctypes.CDLL('./RapidEC/gsv.so')
             self._gsv.sign_init.argtypes = [ctypes.c_int]
             self._gsv.sign_init.restype = None
-            self._gsv.sign_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_sign_t)]
+            self._gsv.sign_exec.argtypes = [ctypes.c_int,
+                ctypes.POINTER(gsv_sign_t), ctypes.POINTER(ctypes.c_uint64)]
             self._gsv.sign_exec.restype = ctypes.POINTER(gsv_sign_t)
             self._gsv.sign_close.argtypes = []
             self._gsv.sign_close.restype = None
@@ -102,9 +103,11 @@ class ECKeySigner(Signer):
             self._gsv.sign_init(self._num_sigs)
             self._hasher = hasher
 
-            path = os.path.join(os.sep, 'home', 'src', 'model_signing', 'cuda',
-                                'binToHex.cuh')
-            self._ctx, [self._binToHex] = utils.compile(path, ['binToHex'])
+            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                '..', 'cuda', 'encoder.cuh')
+            
+            if not hasattr(ECKeySigner, '_binToHex'):
+                _, [ECKeySigner._binToHex] = mycuda.compile(path, ['binToHex'])
 
     def __exit__(self):
         if self._device == 'gpu':
@@ -118,73 +121,73 @@ class ECKeySigner(Signer):
 
     def _gpu_convert_bin_to_hex(self, hashes_d):
         n = len(hashes_d)
-        hash_bin_d = cp.ndarray([n, 64])
-        hash_hex_d = cp.ndarray([n, 128])
+        hash_bin_d = cp.ndarray([n, self._hasher.digestSize], dtype=cp.uint8)
+        hash_hex_d = cp.ndarray([n, 2*self._hasher.digestSize], dtype=cp.uint8)
+
         for i, hash_d in enumerate(hashes_d):
-            hash_bin_d[i] = hash_d
+            driver.cuMemcpy(hash_bin_d[i].data.ptr, hash_d, self._hasher.digestSize)
+
         hex_in = np.array([hash_bin_d.data.ptr], dtype=np.uint64)
         hex_out = np.array([hash_hex_d.data.ptr], dtype=np.uint64)
         args = [hex_in, hex_out]
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
         stream = checkCudaErrors(driver.cuStreamCreate(0))
-
-        print(type(self._ctx), type(self._binToHex), flush=True)
-        checkCudaErrors(driver.cuCtxSetCurrent(self._ctx))
         checkCudaErrors(driver.cuLaunchKernel(
-            self._binToHex, 1, 1, 1, 64, n, 1, 0, stream, args.ctypes.data, 0
+            ECKeySigner._binToHex, n, 1, 1, self._hasher.digestSize, 1, 1, 0,
+            stream, args.ctypes.data, 0
         ))
         checkCudaErrors(driver.cuStreamSynchronize(stream))
         checkCudaErrors(driver.cuStreamDestroy(stream))
         return hash_hex_d
 
-    def sign(self, stmnts: list[statement.Statement], hashes_d=None) -> list[bundle_pb.Bundle]:
+    def _find_dummy_pos(self, data: bytearray):
+        dummy_value = bytes(bytes(range(self._hasher.digestSize)).hex(), 'utf-8')
+        return [m.start() for m in re.finditer(dummy_value, data)]
+
+    def sign(self, stmnts: list[statement.Statement], hashes=None) -> list[bundle_pb.Bundle]:
         sign_tasks = []
         bundles = []
         paes = []
-
-        for stmnt in stmnts:
-            pae = encoding.pae(stmnt.pb)
-            if self._device == 'cpu':
+    
+        if self._device == 'cpu':
+            for stmnt in stmnts:
+                pae = encoding.pae(stmnt.pb)
                 paes.append(pae)
 
-            if self._device == 'gpu':
-                hash_hex_d = self._gpu_convert_bin_to_hex(hashes_d)
-
-                dummy_pos = [m.start() for m in re.finditer(b'0'*128, pae)]
-                assert(len(dummy_pos) == len(hashes_d))
+        if self._device == 'gpu':
+            payloads_hashes_hex_d = [self._gpu_convert_bin_to_hex(h) for h in hashes]
+            for stmnt, hexHashes in zip(stmnts, payloads_hashes_hex_d):
+                pae = encoding.pae(stmnt.pb)
+                dummy_pos = self._find_dummy_pos(pae)
+                assert(len(dummy_pos) == len(hexHashes))
                 pae_d = cp.frombuffer(pae, dtype=cp.uint8)
                 for i, pos in enumerate(dummy_pos):
-                    driver.cuMemcpy(pae_d+pos, hash_hex_d[i].data.ptr, 128)
-
-                # debug
-                tmp = bytearray(len(pae))
-                driver.cuMemcpy(tmp, pae_d, len(pae))
-                print(tmp)
-
+                    checkCudaErrors(driver.cuMemcpy(pae_d.data.ptr + pos,
+                        hexHashes[i].data.ptr, 2*self._hasher.digestSize))
                 paes.append(pae_d)
-        
-        return
 
         if self._device == 'cpu':
             sigs = [self._private_key.sign(pae, ec.ECDSA(SHA256())) for pae in paes]
         elif self._device == 'gpu':
-            for pae in enumerate(paes):
-                self._hasher.update({'pae': pae}, len(pae))
-                digest = self._hasher.compute().digest_value
+            for _ in paes:
                 priv_key = self._private_key.private_numbers().private_value.to_bytes(32)
-                sign_tasks.append(gsv_sign_t(
-                    e=gsv_mem_t.from_buffer_copy(digest),
-                    priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
-
+                sign_tasks.append(gsv_sign_t(priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
             sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
-            sigs_uncoded = self._gsv.sign_exec(self._num_sigs, sig_pending)
+
+            self._hasher.update({i: pae for i, pae in enumerate(paes)})
+            digestMap = self._hasher.compute()
+            digests = [v[1] for k, v in digestMap.items() if k != 'model']
+            digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
+        
+            sigs_uncoded = self._gsv.sign_exec(self._num_sigs, sig_pending, digests)
             sigs_uncoded = ctypes.cast(sigs_uncoded, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
             rsPair = [(int.from_bytes(sig.r), int.from_bytes(sig.s)) for sig in sigs_uncoded.contents]
-            sigs = [utils.encode_dss_signature(rs[0], rs[1]) for rs in rsPair]
+            sigs = [utils.encode_dss_signature(r, s) for r, s in rsPair]
 
-        for stmnt, sig in zip(stmnts, sigs):
+        for stmnt, sig, hexHashes in zip(stmnts, sigs, payloads_hashes_hex_d):
+            payload=json_format.MessageToJson(stmnt.pb).encode()
             env = intoto_pb.Envelope(
-                payload=json_format.MessageToJson(stmnt.pb).encode(),
+                payload=payload,
                 payload_type=encoding.PAYLOAD_TYPE,
                 signatures=[intoto_pb.Signature(sig=sig, keyid=None)],
             )

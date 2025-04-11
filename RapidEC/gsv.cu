@@ -713,10 +713,12 @@ void sign_init(int num_sigs) {
 }
 
 extern "C"
-gsv_sign_t* sign_exec(int num_sigs, gsv_sign_t *sig) {
+gsv_sign_t* sign_exec(int num_sigs, gsv_sign_t *sig, uint64_t *digests) {
     typedef gsv_params_t<GSV_TPI> params;
 
     CUDA_CHECK(cudaMemcpy(d_sign_ins, sig, num_sigs * sizeof(sign_ins_t), cudaMemcpyHostToDevice));
+    for (int i = 0; i < num_sigs; i++)
+        CUDA_CHECK(cudaMemcpy(d_sign_ins, ((uint8_t**)digests)[i], 32, cudaMemcpyDeviceToDevice));
     kernel_sig_sign<params><<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_sign_ins, num_sigs, sm2);
 
     CUDA_CHECK(cudaDeviceSynchronize());

@@ -90,6 +90,7 @@ void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_
     BLAKE2XB_CTX ctx;
     uint64_t key = 0xfedcba9876543210UL;
     cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX, (uint8_t*)&key, sizeof(key));
+    cuda_blake2xb_update(&ctx, (uint8_t*)&i, sizeof(i));
     cuda_blake2xb_update(&ctx, myIn, blockSize);
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }

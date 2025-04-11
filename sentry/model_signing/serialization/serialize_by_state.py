@@ -98,11 +98,13 @@ class StateSerializer(serialization.Serializer):
               was not initialized with `allow_symlinks=True`.
         """
 
-        return self._build_manifest(self._compute_hash(state))
+        manifestItems, hashes_d = self._compute_hash(state)
+        self.hashes_d = hashes_d
+        return self._build_manifest(manifestItems)
 
     def _compute_hash(
         self, state: collections.OrderedDict
-    ) -> manifest.StateManifestItem:
+    ) -> tuple[manifest.StateManifestItem]:
         """Produces the manifest item of the state given by `path`.
 
         Args:
@@ -115,12 +117,12 @@ class StateSerializer(serialization.Serializer):
         """
         digests = self._hasher_factory(state).compute()
 
-        self.hashes_d = []
+        hashes_d = []
         manifestItems = []
-        for key, digest, hash in digests:
+        for key, (digest, hash) in digests.items():
             manifestItems.append(manifest.StateManifestItem(state=key, digest=digest))
-            self.hashes_d.append(hash)
-        return manifestItems
+            hashes_d.append(hash)
+        return manifestItems, hashes_d
 
     @abc.abstractmethod
     def _build_manifest(

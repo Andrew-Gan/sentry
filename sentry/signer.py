@@ -17,7 +17,7 @@
 import argparse
 import logging
 import pathlib
-
+import torch
 from .model_signing.hashing import hashing, file, state
 from .model_signing.serialization import serialize_by_file, serialize_by_state
 from .model_signing import model
@@ -206,78 +206,37 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
 
     return hasher, payload_signer, serializer
 
-
-# item to pass in differs depending on inputType
-# InputType.FILE   : directory path containing model files
-# InputType.MODULE : loaded PyTorch model of type torch.nn.Module
-# InputType.DIGEST : hash digest of type hashing.Digest. This skips hashing.
-def sign_item(item, payload_signer, serializer, inputType: InputType):
+def sign_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     args = _arguments()
-
-    if inputType == InputType.FILE:
+    if isinstance(item, str):
+        _, signer, serializer = build(hashType, topology, InputType.FILE)
         item = pathlib.Path(item)
-    elif inputType == InputType.MODULE:
+    elif isinstance(item, torch.nn.Module):
+        _, signer, serializer = build(hashType, topology, InputType.MODULE)
         item = item.to('cuda').state_dict()
-
-    if inputType == InputType.DIGEST:
-        sigs = model.sign(
-            item=item,
-            signer=payload_signer,
-            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-            serializer=serializer,
-            skipHash=True,
-        )
     else:
-        sigs = model.sign(
-            item=item,
-            signer=payload_signer,
-            payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-            serializer=serializer,
-            ignore_paths=[args.sig_out],
-        )
+        raise TypeError('item is neither str nor torch module')
+
+    sigs = model.sign(
+        item=item,
+        signer=signer,
+        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+        serializer=serializer,
+        ignore_paths=[args.sig_out],
+    )
     for sig in sigs:
         sig.write(args.sig_out)
 
 
-# if __name__ == "__main__":
-#     PATH = './model.pth'
-#     models = [
-#         ('pytorch/vision:v0.10.0', 'resnet152'),
-#         ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-#         ('pytorch/vision:v0.10.0', 'vgg19'),
-#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-#         ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
-#     ]
-
-#     for m in models:
-#         if len(m) == 2:
-#             net = torch.hub.load(m[0], m[1], pretrained=True)
-#         elif len(m) == 3:
-#             net = torch.hub.load(m[0], m[1], m[2])
-
-#         print(f'Hashing {net.__class__.__name__}, num layers: {len(net.state_dict())}, num param: {sum(p.numel() for p in net.parameters())}')
-#         t0 = time.monotonic()
-#         torch.save(net, PATH)
-#         t1 = time.monotonic()
-#         print(f'Write to file: {1000*(t1-t0):.2f} ms')
-
-#         t0 = time.monotonic()
-#         torch.load(PATH, weights_only=False)
-#         t1 = time.monotonic()
-#         print(f'Read from file: {1000*(t1-t0):.2f} ms')
-
-#         for hashType in HashType:
-#             print(f'CPU Hashing from file using {hashType.name}')
-#             sign_item(PATH, hashType, Topology.SERIAL, InputType.FILE)
-
-#             print(f'SeqGPU-{hashType.name}')
-#             sign_item(net, hashType, Topology.SERIAL, InputType.MODULE)
-
-#             print(f'MerkleGPU-{hashType.name}')
-#             sign_item(net, hashType, Topology.MERKLE, InputType.MODULE)
-
-#         print(f'HomomorphicGPU-lattice')
-#         sign_item(net, HashType.LATTICE, Topology.HOMOMORPHIC, InputType.MODULE)
-        
-#         del net
+def sign_dataset(item, hashType=HashType.LATTICE, topology=Topology.HADD):
+    _, signer, serializer = build(hashType, topology, InputType.DIGEST, len(item))
+    args = _arguments()
+    sigs = model.sign(
+        item=item,
+        signer=signer,
+        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
+        serializer=serializer,
+        isDigest=True,
+    )
+    for sig in sigs:
+        sig.write(args.sig_out)
