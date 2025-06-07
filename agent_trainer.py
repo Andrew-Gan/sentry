@@ -1,6 +1,7 @@
 
 import os
 from common import get_model, get_image_dataloader, HashType, Topology
+from transformers import AutoImageProcessor, AutoModelForImageClassification
 import sentry.signer
 
 # ('pytorch/vision:v0.10.0', 'resnet152'),
@@ -11,14 +12,14 @@ import sentry.signer
 # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
 
 if __name__ == '__main__':
-    model, _ = get_model(('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'))
+    model, _ = get_model(('pytorch/vision:v0.10.0', 'resnet152'))
 
     dataloader, hasher = get_image_dataloader(
         data_path=os.path.join('dataset', 'cifar10', 'data'),
         meta_path=os.path.join('dataset', 'cifar10', 'metadata'),
         batch=128,
         device='gpu',
-        gds=True,
+        gds=False,
     )
 
     for data in dataloader:
@@ -27,8 +28,7 @@ if __name__ == '__main__':
 
     print('[Trainer] Model training complete')
 
-    sentry.signer.sign_model(model, HashType.LATTICE, Topology.HADD)
-    sentry.signer.sign_model(model, HashType.LATTICE, Topology.HADD)
+    sentry.signer.sign_model(model, HashType.SHA256, Topology.MERKLE)
     print('[Trainer] Model signing complete')
 
     sentry.signer.sign_dataset(hasher.compute())

@@ -21,7 +21,6 @@
 
 __device__
 void add(const uint64_t b1, const uint64_t b2, uint64_t *out) {
-
     // When bitsPerElem is 16:
     // There are no padding bits, 4x 16-bit values fit exactly into a uint64_t:
     // uint64_t U = [ uint16_t W, uint16_t X, uint16_t Y, uint16_t Z ].
@@ -82,7 +81,7 @@ void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
 }
 
 extern "C" __global__ 
-void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_t n) {
+void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t *blockSize, uint64_t n) {
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     uint8_t *myIn = in[i];
@@ -91,17 +90,21 @@ void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_
     uint64_t key = 0xfedcba9876543210UL;
     cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX, (uint8_t*)&key, sizeof(key));
     cuda_blake2xb_update(&ctx, (uint8_t*)&i, sizeof(i));
-    cuda_blake2xb_update(&ctx, myIn, blockSize);
+    cuda_blake2xb_update(&ctx, myIn, blockSize[i]);
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
 extern "C" __global__
-void reduce_ltHash(uint64_t *out, uint64_t *in) {
+void reduce_ltHash(uint64_t *out, uint64_t *in, uint64_t n) {
     extern __shared__ uint64_t sdata[];
     uint64_t tid = threadIdx.x;
-    uint64_t digestId = (2 * blockDim.x) * blockIdx.x + tid;
+    uint64_t digestId = (2 * blockDim.x * blockIdx.x) + tid;
     uint64_t *lhs = in + digestId;
     uint64_t *rhs = in + digestId + blockDim.x;
+
+    if (blockIdx.x * blockDim.x + threadIdx.x >= n)
+        return;
+
     add(*lhs, *rhs, sdata+tid);
 
     uint64_t numThread = blockDim.x / 2;
@@ -121,35 +124,5 @@ void reduce_ltHash(uint64_t *out, uint64_t *in) {
         *(out + blockOffsetU64 + tid) = sdata[tid];
     }
 }
-
-// __device__
-// void ltHash_sub_warp(uint64_t B, uint64_t *sdata, uint64_t tid) {
-//     for (int numThread = 32; numThread >= 8; numThread /= 2) {
-//         if (tid < numThread)
-//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
-//     }
-// }
-
-// extern "C" __global__
-// void ltHash_sub(uint64_t B, uint64_t *dataIO) {
-//     extern __shared__ uint64_t sdata[];
-//     uint64_t tid = threadIdx.x;
-//     uint64_t digestId = (2 * blockDim.x) * blockIdx.x + tid;
-//     uint64_t *lhs = dataIO + digestId;
-//     uint64_t *rhs = dataIO + digestId + blockDim.x;
-//     sub(B, *lhs, *rhs, sdata + tid);
-
-//     for (uint64_t numThread = blockDim.x / 2; numThread > 32; numThread /= 2) {
-//         if (tid < numThread) {
-//             sub(B, sdata[tid], sdata[tid + numThread], sdata + tid);
-//         }
-//         __syncthreads();
-//     }
-//     if (tid < 32) ltHash_sub_warp(B, sdata, tid);
-//     if (tid == 0) memcpy(lhs, sdata, BLAKE2B_BYTES_MAX);
-// }
-
-// using LtHash16_1024 = LtHash<16, 1024>;
-// using LtHash32_1024 = LtHash<32, 1024>;
 
 #endif

@@ -43,6 +43,7 @@ from . import hashing
 
 from cuda.bindings import driver, runtime
 import numpy as np
+import cupy as cp
 import collections
 from ..cuda.mycuda import checkCudaErrors
 
@@ -350,7 +351,7 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             sortedLayers = sorted(unsortedLayers, key=lambda x: x[2])
             totalBlocks += (v.nbytes + blockSize - 1) // blockSize
         
-        spaceToAlloc = totalBlocks*self.digestSize
+        spaceToAlloc = totalBlocks * self.digestSize
         if self.allocatedSpace < spaceToAlloc:
             checkCudaErrors(runtime.cudaFree(self.iDataFull))
             checkCudaErrors(runtime.cudaFree(self.oDataFull))
@@ -387,11 +388,12 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
                 grid = (nThread + (block-1)) // block
                 args = [oData, iData]
                 args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-        
+
                 checkCudaErrors(driver.cuLaunchKernel(
                     self.adder, grid, 1, 1, block, 1, 1, block * self.digestSize,
                     stream, args.ctypes.data, 0,
                 ))
+                checkCudaErrors(runtime.cudaStreamSynchronize(stream))
                 nBlock = grid
                 outputStored[i] = not outputStored[i]
             currBytes += nBlock * self.digestSize
@@ -423,22 +425,21 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             nBlock = (size + (blockSize-1)) // blockSize
             currBytes += nBlock * self.digestSize
     
-    # partitions: src -> list of cupy ndarrays
     def update_dataset(self, data: collections.OrderedDict, blockSize) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
         totalBlocks = 0
-        for k, v in data.items():
+        for source, samples in data.items():
             # register new hash category in dictionary
-            if k not in self.sepDigests:
+            if source not in self.sepDigests:
                 mem = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-                self.sepDigests[k] = (mem, np.array([mem], dtype=np.uint64))
-            partitionBytes = len(v) * blockSize
+                self.sepDigests[source] = (mem, np.array([mem], dtype=np.uint64))
+            partitionBytes = sum([v.nbytes for v in samples])
             totalBlocks += (partitionBytes + blockSize - 1) // blockSize
         
-        spaceToAlloc = totalBlocks * self.digestSize
+        spaceToAlloc = (totalBlocks + 1) * self.digestSize
         if self.allocatedSpace < spaceToAlloc:
             checkCudaErrors(runtime.cudaFree(self.iDataFull))
             checkCudaErrors(runtime.cudaFree(self.oDataFull))
@@ -453,12 +454,14 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
                 samplePtrs.nbytes, runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, stream))
             samplePtrsA = (samplePtrsA, np.array([samplePtrsA], dtype=np.uint64))
-            
+            sampleSizes = cp.array([sample.nbytes for sample in samples])
+            sampleSizesA = np.array([sampleSizes.data.ptr], dtype=np.uint64)
+
             nA = np.array([len(samples)], dtype=np.uint64)
             iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
             oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
 
-            args = [oData, samplePtrsA[1], blockSizeA, nA]
+            args = [oData, samplePtrsA[1], sampleSizesA, nA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashblock, 1, 1, 1, len(samples), 1, 1, 0, stream,
@@ -466,24 +469,22 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             ))
             checkCudaErrors(runtime.cudaFreeAsync(samplePtrsA[0], stream))
 
-            nBlock = len(samples)
-            while nBlock > 1:
+            nDigests = len(samples)
+            while nDigests > 1:
                 iData, oData = oData, iData
-                nBlock = ((nBlock + 1) & ~0b1)
-                nThread = (nBlock // 2) * 8
+                nThread = ((nDigests + 1) >> 1) * 8
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
-                args = [oData, iData]
+                args = [oData, iData, np.array([nThread], dtype=np.uint64)]
                 args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-        
                 checkCudaErrors(driver.cuLaunchKernel(
                     self.adder, grid, 1, 1, block, 1, 1, block * self.digestSize,
                     stream, args.ctypes.data, 0,
                 ))
-                nBlock = grid
+                nDigests = grid
             
             # add layer hash to layer sum
-            args = [self.sepDigests[src][1], oData]
+            args = [self.sepDigests[src][1], oData, np.array([8], dtype=np.uint64)]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,

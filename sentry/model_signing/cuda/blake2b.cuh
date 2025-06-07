@@ -171,6 +171,9 @@ void cuda_blake2b_update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
     }
 
     block_index =  inlen - BLAKE2B_BLOCK_LENGTH;
+    if (block_index <= 0)
+        return;
+
     for (in_index = start; in_index < block_index; in_index += BLAKE2B_BLOCK_LENGTH) {
         ctx->t0 += BLAKE2B_BLOCK_LENGTH;
         if (ctx->t0 == 0)
