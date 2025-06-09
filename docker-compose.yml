@@ -10,6 +10,7 @@ services:
     dns: 8.8.8.8
     container_name: sentry_dataset
     volumes:
+      - ./signatures:/home/signatures
       - /share/sign-ml/torch:/home/torch
       - /share/sign-ml/dataset:/home/dataset
       - /run/udev:/run/udev:ro
@@ -31,14 +32,14 @@ services:
     <<: *sentry
     container_name: sentry_trainer
     command: >
-      python agent_trainer.py --sig_out /home/dataset/cifar10/dataset.sig
+      python agent_trainer.py --sig_out /home/signatures
       --model_path /home/torch private-key --private_key private.pem
 
   sentry_inferencer:
     <<: *sentry
     container_name: sentry_inferencer
     command: >
-      python agent_inferencer.py --sig_path /home/dataset/cifar10/dataset.sig
+      python agent_inferencer.py --sig_path /home/signatures
       --model_path /home/torch private-key --public_key public.pem
 
 # docker compose cp sentry_trainer:/home/cufile.log .

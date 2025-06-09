@@ -17,6 +17,7 @@ if __name__ == '__main__':
     for data in dataloader:
         x, y = data[0]['data'], data[0]['label']
         # pred = model(x)
+
     dataset_digest = hasher.compute()
     print('[Inferencer] Model inference complete')
 

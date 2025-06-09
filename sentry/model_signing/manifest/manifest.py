@@ -315,7 +315,7 @@ class StateManifestItem(ManifestItem):
         """Builds a manifest item pairing a file with its digest.
 
         Args:
-            path: The name of the state
+            state: The name of the state
             digest: The digest of the file.
         """
         self.state = state

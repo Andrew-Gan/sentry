@@ -31,13 +31,13 @@ PayloadGeneratorFunc: TypeAlias = Callable[
 
 
 def sign(
-    item: pathlib.Path | collections.OrderedDict,
+    item: pathlib.Path | collections.OrderedDict | Iterable[hashing.Digest],
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
     isDigest: bool = False,
-) -> signing.Signature:
+) -> Iterable[signing.Signature]:
     """Provides a wrapper function for the steps necessary to sign a model.
 
     Args:
@@ -52,22 +52,19 @@ def sign(
         The model's signature.
     """
 
-    stmnts = []
-    hashes = []
     if isDigest:
-        for i in range(len(item)):
-            value = item[i]
+        stmnts = []
+        hashes = []
+        for src, (digest, trueHash) in item.items():
             manifestItem = manifest.StateManifestItem(
-                state=item[0], digest=value[0])
+                state=src, digest=digest)
             manif = serializer._build_manifest([manifestItem])
             stmnts.append(payload_generator(manif))
-            hashes.append([value[1]])
+            hashes.append([trueHash])
     else:
-        items = item if isinstance(item, list) else [item]
-        for item in items:
-            manif = serializer.serialize(item, ignore_paths=ignore_paths)
-            stmnts.append(payload_generator(manif))
-            hashes.append(serializer.hashes_d if hasattr(serializer, 'hashes_d') else None)
+        manif = serializer.serialize(item, ignore_paths=ignore_paths)
+        stmnts = [payload_generator(manif)]
+        hashes = [serializer.hashes_d if hasattr(serializer, 'hashes_d') else None]
     return signer.sign(stmnts, hashes)
 
 
@@ -92,16 +89,20 @@ def verify(
     Raises:
         verifying.VerificationError: on any verification error.
     """
-    sigs = sig if isinstance(sig, list) else [sig]
     items = item if isinstance(item, list) else [item]
+    sigs = sig if isinstance(sig, list) else [sig]
 
-    peer_manifest = verifier.verify(sigs)
-    for i, (item, sig) in enumerate(zip(items, sigs)):
-        if isDigest:
-            manifestItem = manifest.StateLevelManifest(state=i, digest=item)
-            local_manifest = serializer._build_manifest([manifestItem])
-        else:
-            local_manifest = serializer.serialize(item, ignore_paths=ignore_paths)
+    peer_manifests = verifier.verify(sigs)
+    local_manifests = []
 
-        if peer_manifest != local_manifest:
-            raise verifying.VerificationError(f'the manifests do not match at {i}')
+    if isDigest:
+        for src, (digest, trueHash) in item.items():
+            manifestItem = manifest.StateManifestItem(
+                state=src, digest=digest)
+            local_manifests.append(serializer._build_manifest([manifestItem]))
+    else:
+        local_manifests.append(serializer.serialize(item, ignore_paths=ignore_paths))
+
+    for peer, local in zip(peer_manifests, local_manifests):
+        if peer != local:
+            raise verifying.VerificationError(f'the manifests do not match')

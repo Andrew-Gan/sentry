@@ -58,10 +58,10 @@ class IntotoSigner(signing.Signer):
         self._sig_signer = sig_signer
 
     @override
-    def sign(self, payload: list[signing.SigningPayload], hashes_d=None) -> list[IntotoSignature]:
+    def sign(self, payload: list[signing.SigningPayload], hashes=None) -> list[IntotoSignature]:
         if not isinstance(payload[0], in_toto.IntotoPayload):
             raise TypeError("only list of IntotoPayloads are supported")
-        bundles = self._sig_signer.sign([p.statement for p in payload], hashes_d)
+        bundles = self._sig_signer.sign([p.statement for p in payload], hashes)
         return [IntotoSignature(bundle) for bundle in bundles]
 
 
@@ -73,5 +73,5 @@ class IntotoVerifier(signing.Verifier):
     def verify(self, signatures: list[signing.Signature]) -> list[manifest_module.Manifest]:
         if not isinstance(signatures[0], IntotoSignature):
             raise TypeError("only list of IntotoSignature is supported")
-        [self._sig_verifier.verify(sig._bundle) for sig in signatures]
+        self._sig_verifier.verify([sig._bundle for sig in signatures])
         return [sig.to_manifest() for sig in signatures]

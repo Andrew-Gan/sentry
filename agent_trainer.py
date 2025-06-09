@@ -12,7 +12,7 @@ import sentry.signer
 # ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
 
 if __name__ == '__main__':
-    model, _ = get_model(('pytorch/vision:v0.10.0', 'resnet152'))
+    model, _ = get_model(('pytorch/vision:v0.10.0', 'vgg19'), pretrained=True)
 
     dataloader, hasher = get_image_dataloader(
         data_path=os.path.join('dataset', 'cifar10', 'data'),

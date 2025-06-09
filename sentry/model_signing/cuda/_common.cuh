@@ -19,7 +19,7 @@
 	uint8_t *myEnd = myIn + blockSize; \
 	if (myIn < in + size) { \
         init(&ctx); \
-        update(&ctx, myIn, blockSize < myEnd - myIn ? blockSize : myEnd - myIn); \
+        update(&ctx, myIn, blockSize); \
         final(&ctx, &out[idx * outBytes]); \
     } \
 } \
@@ -28,7 +28,8 @@
 	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x; \
 	int locIdx = threadIdx.x; \
 	int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x)); \
-	memset(&shMem[locIdx*outBytes], 0, outBytes); \
+    if (locIdx == 0) \
+        memset(&shMem[(blockDim.x)*outBytes], 0, outBytes); \
     if (locIdx < activeThreads) { \
         init(&ctx); \
 		update(&ctx, &in[(2*glbIdx)*outBytes], outBytes); \

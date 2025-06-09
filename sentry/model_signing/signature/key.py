@@ -222,7 +222,7 @@ class ECKeyVerifier(Verifier):
             self._gsv = ctypes.CDLL('./RapidEC/gsv.so')
             self._gsv.verify_init.argtypes = [ctypes.c_int]
             self._gsv.verify_init.restype = None
-            self._gsv.verify_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_sign_t)]
+            self._gsv.verify_exec.argtypes = [ctypes.c_int, ctypes.POINTER(gsv_verify_t)]
             self._gsv.verify_exec.restype = ctypes.POINTER(ctypes.c_int)
             self._gsv.verify_close.argtypes = []
             self._gsv.verify_close.restype = None
@@ -243,40 +243,40 @@ class ECKeyVerifier(Verifier):
 
     def verify(self, bundles: list[bundle_pb.Bundle]) -> None:
         verify_tasks = []
-        paes = []
-        sigs = []
-        for bundle in bundles:
-            statement = json_format.Parse(
-                bundle.dsse_envelope.payload,
-                statement_pb.Statement(),  # pylint: disable=no-member
-            )
-            paes.append(encoding.pae(statement))
-            sigs.append(bundle.dsse_envelope.signatures[0].sig)
+        # paes = []
+        # sigs = []
+        # for bundle in bundles:
+        #     statement = json_format.Parse(
+        #         bundle.dsse_envelope.payload,
+        #         statement_pb.Statement(),  # pylint: disable=no-member
+        #     )
+        #     paes.append(encoding.pae(statement))
+        #     sigs.append(bundle.dsse_envelope.signatures[0].sig)
 
-        if self._device == 'cpu':
-            try:
-                [self._public_key.verify(sig, pae, ec.ECDSA(SHA256()))
-                 for pae, sig in zip(paes, sigs)]
-            except Exception as e:
-                raise VerificationError(
-                    "signature verification failed " + str(e)
-                ) from e
-        elif self._device == 'gpu':
-            for pae, sig in zip(paes, sigs):
-                pae_d = torch.frombuffer(bytearray(pae), dtype=torch.uint8).cuda()
-                self._hasher.update({'pae': pae_d}, len(pae))
-                digest = self._hasher.compute().digest_value
-                pub_x = self._public_key.public_numbers().x.to_bytes(32)
-                pub_y = self._public_key.public_numbers().y.to_bytes(32)
-                r, s = utils.decode_dss_signature(sig)
-                verify_tasks.append(gsv_verify_t(
-                    r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
-                    s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
-                    e=gsv_mem_t.from_buffer_copy(digest),
-                    key_x=gsv_mem_t.from_buffer_copy(pub_x),
-                    key_y=gsv_mem_t.from_buffer_copy(pub_y),
-                ))
-            ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
-            results = self._gsv.verify_exec(self._num_sigs, ver_pending)
-            results = list(results)
-            print(results)
+        # if self._device == 'cpu':
+        #     try:
+        #         [self._public_key.verify(sig, pae, ec.ECDSA(SHA256()))
+        #          for pae, sig in zip(paes, sigs)]
+        #     except Exception as e:
+        #         raise VerificationError(
+        #             "signature verification failed " + str(e)
+        #         ) from e
+        # elif self._device == 'gpu':
+        #     for pae, sig in zip(paes, sigs):
+        #         pae_d = torch.frombuffer(bytearray(pae), dtype=torch.uint8).cuda()
+        #         self._hasher.update({'pae': pae_d}, len(pae))
+        #         digest = self._hasher.compute().digest_value
+        #         pub_x = self._public_key.public_numbers().x.to_bytes(32)
+        #         pub_y = self._public_key.public_numbers().y.to_bytes(32)
+        #         r, s = utils.decode_dss_signature(sig)
+        #         verify_tasks.append(gsv_verify_t(
+        #             r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
+        #             s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
+        #             e=gsv_mem_t.from_buffer_copy(digest),
+        #             key_x=gsv_mem_t.from_buffer_copy(pub_x),
+        #             key_y=gsv_mem_t.from_buffer_copy(pub_y),
+        #         ))
+        #     ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
+        #     results = self._gsv.verify_exec(self._num_sigs, ver_pending)
+        #     results = list(results)
+        #     print(results)

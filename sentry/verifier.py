@@ -30,7 +30,7 @@ from .model_signing.signing import in_toto, in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
 from .compile import HashType, Topology, InputType, compile_hasher
-
+import collections
 
 log = logging.getLogger(__name__)
 
@@ -177,6 +177,7 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
 
 def verify_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     args = _arguments()
+    args.sig_path = args.sig_path / pathlib.Path('model.sig')
     sig = _get_signature(args)
     if isinstance(item, str):
         _, verifier, serializer = build(hashType, topology, InputType.FILE)
@@ -201,10 +202,14 @@ def verify_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     log.info("all checks passed")
 
 
-def verify_dataset(item, hashType=HashType.LATTICE, topology=Topology.HADD):
+def verify_dataset(item: collections.OrderedDict, hashType=HashType.LATTICE, topology=Topology.HADD):
     _, verifier, serializer = build(hashType, topology, InputType.DIGEST)
     args = _arguments()
-    sig = _get_signature(args)
+    sig_path = args.sig_path
+    sig = []
+    for i in range(len(item)):
+        args.sig_path = sig_path / pathlib.Path(f'dataset_{i}.sig')
+        sig.append(_get_signature(args))
     try:
         model.verify(
             sig=sig,

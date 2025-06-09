@@ -29,6 +29,7 @@ from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
 from .compile import HashType, Topology, InputType, compile_hasher
+import collections
 
 log = logging.getLogger(__name__)
 
@@ -217,18 +218,17 @@ def sign_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     else:
         raise TypeError('item is neither str nor torch module')
 
-    sigs = model.sign(
+    sig = model.sign(
         item=item,
         signer=signer,
         payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
         serializer=serializer,
         ignore_paths=[args.sig_out],
-    )
-    for sig in sigs:
-        sig.write(args.sig_out)
+    )[0]
+    sig.write(args.sig_out / pathlib.Path('model.sig'))
 
 
-def sign_dataset(item, hashType=HashType.LATTICE, topology=Topology.HADD):
+def sign_dataset(item: collections.OrderedDict, hashType=HashType.LATTICE, topology=Topology.HADD):
     _, signer, serializer = build(hashType, topology, InputType.DIGEST, len(item))
     args = _arguments()
     sigs = model.sign(
@@ -238,5 +238,5 @@ def sign_dataset(item, hashType=HashType.LATTICE, topology=Topology.HADD):
         serializer=serializer,
         isDigest=True,
     )
-    for sig in sigs:
-        sig.write(args.sig_out)
+    for i, sig in enumerate(sigs):
+        sig.write(args.sig_out / pathlib.Path(f'dataset_{i}.sig'))

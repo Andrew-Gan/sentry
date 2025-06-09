@@ -207,24 +207,21 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.sepDigests = {}
     
     def _reduce_tree(self, nDigest, inputBuffer, outputBuffer, stream):
-        nThread = nBlock = nDigest
-        block = min(512, nThread)
-        grid = (nThread + (block-1)) // block
         inputBuffer = (inputBuffer, np.array([inputBuffer], dtype=np.uint64))
         outputBuffer = (outputBuffer, np.array([outputBuffer], dtype=np.uint64))
-        while nBlock > 1:
-            nBlock = (nBlock + 1) & ~0b1 # padding to multiple of 2
-            nThread = (nBlock // 2) # need half as many threads to compress
+        while nDigest > 1:
+            nDigest = (nDigest + 1) & ~0b1 # padding to multiple of 2
+            nThread = nDigest // 2 # need half as many threads to compress
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
             nThread = np.array([nThread], dtype=np.uint64)
             args = [outputBuffer[1], inputBuffer[1], nThread]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
-                self.reduce, grid, 1, 1, block, 1, 1, block*self.digestSize,
+                self.reduce, grid, 1, 1, block, 1, 1, (block+1)*self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-            nBlock = grid
+            nDigest = grid
             inputBuffer, outputBuffer = outputBuffer, inputBuffer
         return inputBuffer[0]
 
@@ -232,36 +229,44 @@ class MerkleGPU(hashing.StreamingHashEngine):
     def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         streams = [checkCudaErrors(runtime.cudaStreamCreate()) for i in range(len(data))]
-        blockSize = (blockSize, np.array([blockSize], dtype=np.uint64))
 
-        nBlocks = [(v.nbytes + blockSize[0] - 1) // blockSize[0] + 1 for v in data.values()]
-        currBlock = 0
+        # min number of blocks for each layer
+        nBlocks = [(v.nbytes + blockSize - 1) // blockSize for v in data.values()]
+        # pad number of blocks for each layer to multiple of 2
+        nBlocks = [(n + 1) & ~0b1 for n in nBlocks]
         iData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
         oData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
-        
+        checkCudaErrors(runtime.cudaMemset(iData, 0, sum(nBlocks)*self.digestSize))
+        checkCudaErrors(runtime.cudaMemset(oData, 0, sum(nBlocks)*self.digestSize))
+
         for layer in data.keys():
             self.sepDigests[layer] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         self.sepDigests['model'] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
 
+        blockSize = (blockSize, np.array([blockSize], dtype=np.uint64))
+        currBlock = 0
         for stream, (layer, v), nBlock in zip(streams, data.items(), nBlocks):
+            # hash data blocks to equal number of digests
             nThread = nBlock
             block = min(512, nThread)
             grid = (nThread + (block-1)) // block
 
-            size = np.array([v.nbytes], dtype=np.uint64)
+            nBytes = np.array([v.nbytes], dtype=np.uint64)
             ptr = v.data_ptr() if hasattr(v, 'data_ptr') else v.data.ptr
             tensor = np.array([ptr], dtype=np.uint64)
             myIn = iData + self.digestSize * currBlock
             myOut = oData + self.digestSize * currBlock
-            args = [np.array([myIn], dtype=np.uint64), tensor, blockSize[1], size]
+            args = [np.array([myIn], dtype=np.uint64), tensor, blockSize[1], nBytes]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashblock, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
             ))
+
+            # merkle tree reduction to single digest
             layerDigest = self._reduce_tree(nBlock, myIn, myOut, stream)
             checkCudaErrors(runtime.cudaMemcpyAsync(self.sepDigests[layer], layerDigest,
                 self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
-
             currBlock += nBlock
         
         for i, (stream, key) in enumerate(zip(streams, data.keys())):
