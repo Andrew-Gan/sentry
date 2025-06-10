@@ -1,7 +1,6 @@
 
 import os
 from common import get_model, get_image_dataloader, HashType, Topology
-from transformers import AutoImageProcessor, AutoModelForImageClassification
 import sentry.signer
 
 # ('pytorch/vision:v0.10.0', 'resnet152'),

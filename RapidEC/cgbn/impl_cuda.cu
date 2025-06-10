@@ -22,6 +22,7 @@ IN THE SOFTWARE.
 
 ***/
 
+#include <stdio.h>
 #include "arith/arith.h"
 #include "core/unpadded.cu"
 #include "core/core.cu"

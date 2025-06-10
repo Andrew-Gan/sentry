@@ -170,7 +170,7 @@ class ECKeySigner(Signer):
             sigs = [self._private_key.sign(pae, ec.ECDSA(SHA256())) for pae in paes]
         elif self._device == 'gpu':
             for _ in paes:
-                priv_key = self._private_key.private_numbers().private_value.to_bytes(32)
+                priv_key = self._private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
                 sign_tasks.append(gsv_sign_t(priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
             sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
 
@@ -181,7 +181,8 @@ class ECKeySigner(Signer):
         
             sigs_uncoded = self._gsv.sign_exec(self._num_sigs, sig_pending, digests)
             sigs_uncoded = ctypes.cast(sigs_uncoded, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
-            rsPair = [(int.from_bytes(sig.r), int.from_bytes(sig.s)) for sig in sigs_uncoded.contents]
+            rsPair = [(int.from_bytes(sig.r, byteorder='big'),
+                int.from_bytes(sig.s, byteorder='big')) for sig in sigs_uncoded.contents]
             sigs = [utils.encode_dss_signature(r, s) for r, s in rsPair]
 
         for stmnt, sig, hexHashes in zip(stmnts, sigs, payloads_hashes_hex_d):

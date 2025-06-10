@@ -1,6 +1,8 @@
 #ifndef _GSV_GPU_SUPPORT_H_
 #define _GSV_GPU_SUPPORT_H_
 
+#include <stdio.h>
+
 /***
 
 Copyright (c) 2018-2019, NVIDIA CORPORATION.  All rights reserved.
