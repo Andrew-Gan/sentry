@@ -39,6 +39,58 @@ claims about the integrity and provenance of the resulting models, meaning users
 can check for themselves that these claims are true rather than having to just
 trust the model trainer.
 
+## Setup
+We support three ways of running Sentry: Docker, Slurm and native run.
+
+### Docker
+[Docker](https://docs.docker.com/get-started/get-docker/)  
+[Docker Compose](https://docs.docker.com/compose/install/)   
+[Nvidia Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+```
+mkdir -p ./signatures
+```
+
+### Slurm and native run
+```
+python3 -m venv .venv
+source .venv/bin/activate
+
+export TORCH_HOME=./torch
+
+pip install -r requirements.txt
+
+openssl ecparam -name prime256v1 -genkey -noout -out private.pem
+openssl ec -in private.pem -pubout -out public.pem
+
+export CUFILE_ENV_PATH_JSON=cufile.json
+
+nvcc -Xcompiler '-fPIC' -o ./RapidEC/gsv.so -shared ./RapidEC/gsv.cu
+
+mkdir -p ./signatures
+```
+
+## Run
+
+### Docker
+```
+docker compose up --build sentry_dataset
+docker compose up --build sentry_trainer
+docker compose up --build sentry_inferencer
+```
+
+### Slurm
+```
+sbatch --nodes=1 --gpus-per-node=1 -A standby --constraint=B slurm.sh
+```
+Modify the slurm.sh as you see fit.
+
+### Native run
+```
+python agent_dataset.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
+python agent_trainer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
+python agent_inferencer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
+```
+
 ## Projects
 
 Currently, there are two main projects in the repository: model signing (to
