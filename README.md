@@ -80,7 +80,7 @@ docker compose up --build sentry_inferencer
 
 ### Slurm
 ```
-sbatch --nodes=1 --gpus-per-node=1 -A standby --constraint=B slurm.sh
+sbatch --nodes=1 --gpus-per-node=1 -A standby --constraint=B --mem=16384 slurm.sh
 ```
 Modify the slurm.sh as you see fit.
 

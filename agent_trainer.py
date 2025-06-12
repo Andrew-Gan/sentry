@@ -1,17 +1,10 @@
-
 import os
-from common import get_model, get_image_dataloader, HashType, Topology
+from common import get_model, get_image_dataloader
+from sentry.compile import HashAlgo, Topology
 import sentry.signer
 
-# ('pytorch/vision:v0.10.0', 'resnet152'),
-# ('huggingface/pytorch-transformers', 'model', 'bert-base-uncased'),
-# ('huggingface/transformers', 'modelForCausalLM', 'gpt2'),
-# ('pytorch/vision:v0.10.0', 'vgg19'),
-# ('huggingface/transformers', 'modelForCausalLM', 'gpt2-large'),
-# ('huggingface/transformers', 'modelForCausalLM', 'gpt2-xl'),
-
 if __name__ == '__main__':
-    model, _ = get_model(('pytorch/vision:v0.10.0', 'vgg19'), pretrained=True)
+    model, _ = get_model('vgg19', pretrained=True, device='gpu')
 
     dataloader, hasher = get_image_dataloader(
         data_path=os.path.join('dataset', 'cifar10', 'data'),
@@ -23,11 +16,10 @@ if __name__ == '__main__':
 
     for data in dataloader:
         x, y = data[0]['data'], data[0]['label']
-    #     pred = model(x)
-
+        # pred = model(x)
     print('[Trainer] Model training complete')
 
-    sentry.signer.sign_model(model, HashType.SHA256, Topology.MERKLE)
+    sentry.signer.sign_model(model)
     print('[Trainer] Model signing complete')
 
     sentry.signer.sign_dataset(hasher.compute())

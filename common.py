@@ -4,6 +4,8 @@ from nvidia.dali.plugin.pytorch import DALIGenericIterator
 import torch
 from sentry import compile
 from sentry.compile import HashType, Topology, InputType
+from transformers import AutoImageProcessor, AutoModelForImageClassification
+from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 
 def hash_batch(data: list, metadata: list):
     partitions = {}
@@ -16,10 +18,18 @@ def hash_batch(data: list, metadata: list):
 
 # TORCH HUB: load pretrained ML model and save to file
 def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
-    if len(model_name) == 2:
-        model = torch.hub.load(model_name[0], model_name[1], pretrained=pretrained)
-    elif len(model_name) == 3:
-        model = torch.hub.load(model_name[0], model_name[1], model_name[2])
+    if model_name == 'resnet152':
+        model = AutoModelForImageClassification.from_pretrained("microsoft/resnet-152")
+    elif model_name == 'bert':
+        model = AutoModelForMaskedLM.from_pretrained("google-bert/bert-base-uncased")
+    elif model_name == 'vgg19':
+        model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19')
+    elif model_name == 'gpt2':
+        model = AutoModelForCausalLM.from_pretrained("openai-community/gpt2")
+    elif model_name == 'gpt2-xl':
+        model = AutoModelForCausalLM.from_pretrained("openai-community/gpt2-xl")
+    else:
+        raise NotImplementedError(f'Fetching of {model_name} not implemented')
 
     modelPath = './model.pth'
     torch.save(model, modelPath)
