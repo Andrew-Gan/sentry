@@ -185,7 +185,7 @@ class ECKeySigner(Signer):
                 int.from_bytes(sig.s, byteorder='big')) for sig in sigs_uncoded.contents]
             sigs = [utils.encode_dss_signature(r, s) for r, s in rsPair]
 
-        for stmnt, sig, hexHashes in zip(stmnts, sigs, payloads_hashes_hex_d):
+        for stmnt, sig in zip(stmnts, sigs):
             payload=json_format.MessageToJson(stmnt.pb).encode()
             env = intoto_pb.Envelope(
                 payload=payload,

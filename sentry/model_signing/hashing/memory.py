@@ -46,6 +46,9 @@ import numpy as np
 import cupy as cp
 import collections
 from ..cuda.mycuda import checkCudaErrors
+import threading
+import io
+import torch
 
 
 class SHA256(hashing.StreamingHashEngine):
@@ -194,6 +197,110 @@ class SeqGPU(hashing.StreamingHashEngine):
     @override
     def digest_size(self) -> int:
         return self.digestSize
+
+class MerkleCPU(hashing.StreamingHashEngine):
+    def __init__(self, hasher : hashing.StreamingHashEngine):
+        self.hasher = hasher
+        self.digestSize = hasher().digest_size
+        self.sepDigests = {}
+    
+    def worker_thread(self, layer, v, myBuff0, myBuff1, nBlock, blockSize):
+        # hash blocks of data into equal number of digests
+        hasher = self.hasher()
+        buff = io.BytesIO()
+        torch.save(v, buff)
+        buff.seek(0)
+        for i in range(nBlock):
+            hasher.reset()
+            hasher.update(buff.read(blockSize))
+            myBuff0[i] = hasher.compute().digest_value
+
+        # merkle tree reduction to single digest
+        pos = False
+        while nBlock > 1:
+            nBlock = (nBlock + 1) & ~0b1 # padding to multiple of 2
+            for i in range(nBlock // 2):
+                hasher.reset()
+                pos = not pos
+                if pos:
+                    hasher.update(myBuff0[2*i])
+                    hasher.update(myBuff0[2*i+1])
+                    myBuff1[i] = hasher.compute().digest_value
+                else:
+                    hasher.update(myBuff1[2*i])
+                    hasher.update(myBuff1[2*i+1])
+                    myBuff0[i] = hasher.compute().digest_value
+            nBlock //= 2
+        self.sepDigests[layer] = myBuff1[0] if pos else myBuff0[0]
+        return pos
+
+    @override
+    def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
+        # min number of blocks for each layer
+        nBlocks = [(v.nbytes + blockSize - 1) // blockSize for v in data.values()]
+        # pad number of blocks for each layer to multiple of 2
+        nBlocks = [(n + 1) & ~0b1 for n in nBlocks]
+        buff0 = [[bytearray(self.digestSize) for _ in range(nBlock)] for nBlock in nBlocks]
+        buff1 = [[bytearray(self.digestSize) for _ in range(nBlock)] for nBlock in nBlocks]
+
+        self.sepDigests = {layer: bytearray(self.digestSize) for layer in data.keys()}
+        self.sepDigests['model'] = bytearray(self.digestSize)
+
+        threads = []
+        for (layer, v), myBuff0, myBuff1, nBlock in zip(data.items(), buff0, buff1, nBlocks):
+            thread = threading.Thread(target=self.worker_thread,
+                args=[layer, v, myBuff0, myBuff1, nBlock, blockSize])
+            thread.start()
+            threads.append(thread)
+        
+        for thread in threads:
+            thread.join()
+
+        # reduce layer digests into one model digest
+        nLayer = len(data)
+        hasher = self.hasher()
+        pos = False
+        buff0 = [bytearray(self.digestSize) for _ in range(nLayer)]
+        buff1 = [bytearray(self.digestSize) for _ in range(nLayer)]
+        for i, layer in enumerate(data.keys()):
+            buff0[i] = self.sepDigests[layer]
+        while nLayer > 1:
+            nLayer = (nLayer + 1) & ~0b1 # padding to multiple of 2
+            for i in range(nLayer // 2):
+                hasher.reset()
+                pos = not pos
+                if pos:
+                    hasher.update(buff0[2*i])
+                    hasher.update(buff0[2*i+1])
+                    buff1[i] = hasher.compute().digest_value
+                else:
+                    hasher.update(buff1[2*i])
+                    hasher.update(buff1[2*i+1])
+                    buff0[i] = hasher.compute().digest_value
+            nLayer //= 2
+        self.sepDigests['model'] = buff1[0] if pos else buff0[0]
+
+    @override
+    def reset(self, data: bytes = b"") -> None:
+        pass
+
+    @override
+    def compute(self) -> collections.OrderedDict:
+        digests = {}
+        for key, trueHash in self.sepDigests.items():
+            digest = hashing.Digest(self.digest_name, bytes(range(64)))
+            digests[key] = (digest, trueHash)
+        return digests
+
+    @property
+    @override
+    def digest_name(self) -> str:
+        return "MerkleCPU"
+
+    @property
+    @override
+    def digest_size(self) -> int:
+        return self.hasher.digestSize
 
 class MerkleGPU(hashing.StreamingHashEngine):
     # reduce factor is 1 for normal hashing

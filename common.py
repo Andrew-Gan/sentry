@@ -3,7 +3,7 @@ import nvidia.dali.fn as fn
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 import torch
 from sentry import compile
-from sentry.compile import HashType, Topology, InputType
+from sentry.compile import HashAlgo, Topology, InputType, get_hasher
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 
@@ -36,7 +36,7 @@ def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
     return model.to('cuda' if device=='gpu' else device), modelPath
 
 def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
-    hash_batch.hasher = compile.compile_hasher(HashType.LATTICE, Topology.HADD, InputType.DIGEST)
+    hash_batch.hasher = get_hasher(HashAlgo.LATTICE, Topology.HADD, InputType.DIGEST, device)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_images():
@@ -72,7 +72,7 @@ def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str
     return dali_loader, hash_batch.hasher
 
 def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
-    hash_batch.hasher = compile.compile_hasher(HashType.LATTICE, Topology.HADD, InputType.DIGEST)
+    hash_batch.hasher = compile.get_hasher(HashAlgo.LATTICE, Topology.HADD, InputType.DIGEST)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_texts():

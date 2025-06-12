@@ -29,7 +29,7 @@ from .model_signing.signature import verifying
 from .model_signing.signing import in_toto, in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .compile import HashType, Topology, InputType, compile_hasher
+from .compile import HashAlgo, Topology, InputType, get_hasher
 import collections
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def _get_verifier(args: argparse.Namespace, device='cpu', num_sigs=1) -> signing
         _check_private_key_flags(args)
         verifierHasher = None
         if device == 'gpu':
-            verifierHasher = compile_hasher(HashType.SHA256, Topology.SERIAL, InputType.MODULE)
+            verifierHasher = get_hasher(HashAlgo.SHA256, Topology.SERIAL, InputType.MODULE)
 
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         if device == 'cpu':
@@ -147,12 +147,8 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
         return in_toto_signature.IntotoSignature.read(args.sig_path)
 
 
-def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs=1):
-    if inputType is not InputType.FILE:
-        hasher = compile_hasher(hashType, topology, inputType)
-
+def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs=1):
     args = _arguments()
-    dev = 'cpu' if inputType == InputType.FILE else 'gpu'
     verifier = _get_verifier(args, dev, num_sigs)
     
     if inputType == InputType.DIGEST:
@@ -162,11 +158,13 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
     elif inputType == InputType.FILE:
         def hasher_factory(item) -> hashing.HashEngine:
             return file.SimpleFileHasher(
-                file=item, content_hasher=hashType.value[2]())
+                file=item, content_hasher=hashAlgo.value[2]())
         serializer = serialize_by_file.ManifestSerializer(
             file_hasher_factory=hasher_factory)
 
     elif inputType == InputType.MODULE:
+        hasher = get_hasher(hashAlgo, topology, inputType, device)
+
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
@@ -175,16 +173,17 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
     return hasher, verifier, serializer
 
 
-def verify_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
+def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE):
     args = _arguments()
     args.sig_path = args.sig_path / pathlib.Path('model.sig')
     sig = _get_signature(args)
     if isinstance(item, str):
-        _, verifier, serializer = build(hashType, topology, InputType.FILE)
+        _, verifier, serializer = build(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
-        _, verifier, serializer = build(hashType, topology, InputType.MODULE)
-        item = item.to('cuda').state_dict()
+        dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
+        _, verifier, serializer = build(hashAlgo, topology, InputType.MODULE, dev)
+        item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
 
@@ -202,8 +201,8 @@ def verify_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     log.info("all checks passed")
 
 
-def verify_dataset(item: collections.OrderedDict, hashType=HashType.LATTICE, topology=Topology.HADD):
-    _, verifier, serializer = build(hashType, topology, InputType.DIGEST)
+def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
+    _, verifier, serializer = build(hashAlgo, topology, InputType.DIGEST)
     args = _arguments()
     sig_path = args.sig_path
     sig = []

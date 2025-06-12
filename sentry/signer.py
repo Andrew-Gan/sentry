@@ -28,7 +28,7 @@ from .model_signing.signing import in_toto
 from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .compile import HashType, Topology, InputType, compile_hasher
+from .compile import HashAlgo, Topology, InputType, get_hasher
 import collections
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def _get_payload_signer(args: argparse.Namespace, device='cpu', num_sigs=1) -> s
         _check_private_key_options(args)
         signerHasher = None
         if device == 'gpu':
-            signerHasher = compile_hasher(HashType.SHA256, Topology.MERKLE, InputType.MODULE)
+            signerHasher = get_hasher(HashAlgo.SHA256, Topology.MERKLE, InputType.MODULE, device)
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,
@@ -180,13 +180,9 @@ def _check_pki_options(args: argparse.Namespace):
         log.warning("No certificate chain provided")
 
 
-def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs=1):
-    if inputType is not InputType.FILE:
-        hasher = compile_hasher(hashType, topology, inputType)
-
+def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
     args = _arguments()
-    dev = 'cpu' if inputType == InputType.FILE else 'gpu'
-    payload_signer = _get_payload_signer(args, dev, num_sigs)
+    payload_signer = _get_payload_signer(args, device, num_sigs)
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(
@@ -195,11 +191,13 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
     elif inputType == InputType.FILE:
         def hasher_factory(item) -> hashing.HashEngine:
             return file.SimpleFileHasher(
-                file=item, content_hasher=hashType.value[2]())
+                file=item, content_hasher=hashAlgo.value[2]())
         serializer = serialize_by_file.ManifestSerializer(
             file_hasher_factory=hasher_factory)
 
     elif inputType == InputType.MODULE:
+        hasher = get_hasher(hashAlgo, topology, inputType, device)
+
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
@@ -207,14 +205,15 @@ def build(hashType: HashType, topology: Topology, inputType: InputType, num_sigs
 
     return hasher, payload_signer, serializer
 
-def sign_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
+def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE):
     args = _arguments()
     if isinstance(item, str):
-        _, signer, serializer = build(hashType, topology, InputType.FILE)
+        _, signer, serializer = build(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
-        _, signer, serializer = build(hashType, topology, InputType.MODULE)
-        item = item.to('cuda').state_dict()
+        dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
+        _, signer, serializer = build(hashAlgo, topology, InputType.MODULE, dev)
+        item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
 
@@ -228,8 +227,8 @@ def sign_model(item, hashType=HashType.SHA256, topology=Topology.MERKLE):
     sig.write(args.sig_out / pathlib.Path('model.sig'))
 
 
-def sign_dataset(item: collections.OrderedDict, hashType=HashType.LATTICE, topology=Topology.HADD):
-    _, signer, serializer = build(hashType, topology, InputType.DIGEST, len(item))
+def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
+    _, signer, serializer = build(hashAlgo, topology, InputType.DIGEST, len(item))
     args = _arguments()
     sigs = model.sign(
         item=item,
