@@ -17,9 +17,10 @@
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x; \
     uint8_t *myIn = in + idx * blockSize; \
 	uint8_t *myEnd = myIn + blockSize; \
+    uint64_t rem = (in + size) - myIn; \
 	if (myIn < in + size) { \
         init(&ctx); \
-        update(&ctx, myIn, blockSize); \
+        update(&ctx, myIn, rem < blockSize ? rem : blockSize); \
         final(&ctx, &out[idx * outBytes]); \
     } \
 } \
@@ -37,18 +38,20 @@
         final(&ctx, &shMem[locIdx*outBytes]); \
 	} \
     __syncthreads(); \
-    activeThreads = (activeThreads + 1) / 2; \
-    for (; activeThreads > 0; activeThreads /= 2) { \
-		if (locIdx < activeThreads) { \
-			update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
-			update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
-		} \
-		__syncthreads(); \
-		if (locIdx < activeThreads) \
-            final(&ctx, &shMem[locIdx*outBytes]); \
-        __syncthreads(); \
-        if (activeThreads > 1 && activeThreads & 0b1 == 1) activeThreads++; \
-	} \
+    if (activeThreads > 1) { \
+        activeThreads = (activeThreads + 1) / 2; \
+        for (; activeThreads > 0; activeThreads /= 2) { \
+            if (locIdx < activeThreads) { \
+                update(&ctx, &shMem[(2*locIdx)*outBytes], outBytes); \
+                update(&ctx, &shMem[(2*locIdx+1)*outBytes], outBytes); \
+            } \
+            __syncthreads(); \
+            if (locIdx < activeThreads) \
+                final(&ctx, &shMem[locIdx*outBytes]); \
+            __syncthreads(); \
+            if (activeThreads > 1 && activeThreads & 0b1 == 1) activeThreads++; \
+        } \
+    } \
     if (locIdx == 0) { \
         memcpy(out + blockIdx.x*outBytes, shMem, outBytes); \
     } \

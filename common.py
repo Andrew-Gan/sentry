@@ -6,6 +6,7 @@ from sentry import compile
 from sentry.compile import HashAlgo, Topology, InputType, get_hasher
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
+import torchvision
 
 def hash_batch(data: list, metadata: list):
     partitions = {}
@@ -23,7 +24,7 @@ def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
     elif model_name == 'bert':
         model = AutoModelForMaskedLM.from_pretrained("google-bert/bert-base-uncased")
     elif model_name == 'vgg19':
-        model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19')
+        model = torch.hub.load('pytorch/vision:v0.10.0', 'vgg19', weights=torchvision.models.VGG19_Weights.IMAGENET1K_V1)
     elif model_name == 'gpt2':
         model = AutoModelForCausalLM.from_pretrained("openai-community/gpt2")
     elif model_name == 'gpt2-xl':

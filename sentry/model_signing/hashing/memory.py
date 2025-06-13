@@ -47,8 +47,6 @@ import cupy as cp
 import collections
 from ..cuda.mycuda import checkCudaErrors
 import threading
-import io
-import torch
 
 
 class SHA256(hashing.StreamingHashEngine):
@@ -207,13 +205,17 @@ class MerkleCPU(hashing.StreamingHashEngine):
     def worker_thread(self, layer, v, myBuff0, myBuff1, nBlock, blockSize):
         # hash blocks of data into equal number of digests
         hasher = self.hasher()
-        buff = io.BytesIO()
-        torch.save(v, buff)
-        buff.seek(0)
+        rem = v.nbytes
         for i in range(nBlock):
             hasher.reset()
-            hasher.update(buff.read(blockSize))
-            myBuff0[i] = hasher.compute().digest_value
+            sizeToRead = min(rem, blockSize)
+            data = bytes(sizeToRead)
+            checkCudaErrors(runtime.cudaMemcpy(data, v.data_ptr()+(i*blockSize),
+                sizeToRead, runtime.cudaMemcpyKind.cudaMemcpyHostToHost))
+            if sizeToRead > 0:
+                hasher.update(data)
+                myBuff0[i] = hasher.compute().digest_value
+            rem -= sizeToRead
 
         # merkle tree reduction to single digest
         pos = False
