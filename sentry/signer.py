@@ -28,7 +28,7 @@ from .model_signing.signing import in_toto
 from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .common import HashAlgo, Topology, InputType
+from .model_signing.hashing.topology import get_hasher, HashAlgo, Topology, InputType
 import collections
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def _get_payload_signer(args: argparse.Namespace, device='cpu', num_sigs=1) -> s
         _check_private_key_options(args)
         signerHasher = None
         if device == 'gpu':
-            signerHasher = MerkleGPU(HashAlgo.SHA256)
+            signerHasher = get_hasher(HashAlgo.SHA256, Topology.SERIAL, InputType.DIGEST, device)
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,

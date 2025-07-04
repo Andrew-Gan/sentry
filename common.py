@@ -2,8 +2,7 @@ from nvidia.dali.pipeline import pipeline_def
 import nvidia.dali.fn as fn
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 import torch
-from sentry import compile
-from sentry.compile import HashAlgo, Topology, InputType
+from sentry.model_signing.hashing.topology import HashAlgo, Topology, InputType
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 import torchvision

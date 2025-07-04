@@ -29,7 +29,7 @@ from .model_signing.signature import verifying
 from .model_signing.signing import in_toto, in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .common import HashAlgo, Topology, InputType
+from .model_signing.hashing.topology import get_hasher, HashAlgo, Topology, InputType
 import collections
 
 log = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ def _get_verifier(args: argparse.Namespace, device='cpu', num_sigs=1) -> signing
         _check_private_key_flags(args)
         verifierHasher = None
         if device == 'gpu':
-            verifierHasher = MerkleGPU(HashAlgo.SHA256)
+            signerHasher = get_hasher(HashAlgo.SHA256, Topology.SERIAL, InputType.DIGEST, device)
 
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         if device == 'cpu':

@@ -34,9 +34,8 @@ import torch
 import re
 import numpy as np
 import cupy as cp
-from ..cuda import mycuda
 from cuda.bindings import driver
-from ..cuda.mycuda import checkCudaErrors
+from ..cuda.nvrtc import rtcompile, checkCudaErrors
 import os
 
 
@@ -107,7 +106,7 @@ class ECKeySigner(Signer):
                                 '..', 'cuda', 'encoder.cuh')
             
             if not hasattr(ECKeySigner, '_binToHex'):
-                _, [ECKeySigner._binToHex] = mycuda.compile(path, ['binToHex'])
+                _, [ECKeySigner._binToHex] = nvrtc.rtcompile(path, ['binToHex'])
 
     def __exit__(self):
         if self._device == 'gpu':
