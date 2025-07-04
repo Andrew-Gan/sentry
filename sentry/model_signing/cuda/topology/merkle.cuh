@@ -1,9 +1,9 @@
 #if defined(SHA256)
-    #include "algorithm/sha256.cuh"
+    #include "../algorithm/sha256.cuh"
 #elif defined(BLAKE2)
-    #include "algorithm/blake2.cuh"
+    #include "../algorithm/blake2.cuh"
 #elif defined(SHA3)
-    #include "algorithm/sha3.cuh"
+    #include "../algorithm/sha3.cuh"
 #endif
 
 #define OUT_BYTES 32UL
@@ -13,7 +13,6 @@ void hash_tensor(unsigned char *out, unsigned char *in, unsigned long blockSize,
 	CTX ctx;
     unsigned long idx = blockIdx.x * blockDim.x + threadIdx.x;
     unsigned char *myIn = in + idx * blockSize;
-	unsigned char *myEnd = myIn + blockSize;
     unsigned long rem = (in + size) - myIn;
 	if (myIn < in + size) {
         init(&ctx);
@@ -43,6 +42,7 @@ void hash_dict(unsigned char *out, unsigned long blockSize, unsigned long *start
         final(&ctx, &out[idx * OUT_BYTES]);
 }
 
+extern "C" __global__
 void reduce(unsigned char *out, unsigned char *in, size_t n) {
 	extern __shared__ unsigned char shMem[];
 	CTX ctx;

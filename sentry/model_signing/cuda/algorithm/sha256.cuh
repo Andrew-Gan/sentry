@@ -14,6 +14,10 @@
 
 /**************************** DATA TYPES ****************************/
 
+#define uint8_t unsigned char
+#define uint32_t unsigned int
+#define uint64_t unsigned long
+
 typedef struct {
 	uint8_t data[64];
 	unsigned int datalen;
@@ -164,4 +168,4 @@ __device__ void final(SHA256_CTX *ctx, uint8_t hash[])
 	}
 }
 
-typedef CTX SHA256_CTX
+typedef SHA256_CTX CTX;

@@ -17,6 +17,10 @@
 #ifndef __LTHASH_H__
 #define __LTHASH_H__
 
+#define uint8_t unsigned char
+#define uint32_t unsigned int
+#define uint64_t unsigned long
+
 #include "blake2xb.cuh"
 
 __device__

@@ -7,6 +7,10 @@
  * This file is released into the Public Domain.
  */
 
+#define uint8_t unsigned char
+#define uint32_t unsigned int
+#define uint64_t unsigned long
+
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
@@ -303,4 +307,4 @@ __device__ void final(SHA3_CTX *ctx, uint8_t *out)
     }
 }
 
-typedef CTX SHA3_CTX
+typedef SHA3_CTX CTX;

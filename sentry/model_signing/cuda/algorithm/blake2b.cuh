@@ -7,6 +7,10 @@
  * This file is released into the Public Domain.
  */
 
+#define uint8_t unsigned char
+#define uint32_t unsigned int
+#define uint64_t unsigned long
+
 #define BLAKE2B_ROUNDS 12
 #define BLAKE2B_BLOCK_LENGTH 128
 #define BLAKE2B_CHAIN_SIZE 8
@@ -198,4 +202,4 @@ __device__ void final(BLAKE2B_CTX *ctx, unsigned char* out) {
     }
 }
 
-typedef CTX BLAKE2B_CTX
+typedef BLAKE2B_CTX CTX;

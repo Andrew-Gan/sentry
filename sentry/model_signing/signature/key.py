@@ -35,7 +35,7 @@ import re
 import numpy as np
 import cupy as cp
 from cuda.bindings import driver
-from ..cuda.nvrtc import rtcompile, checkCudaErrors
+from ..cuda.compiler import rtcompile, checkCudaErrors
 import os
 
 
@@ -102,11 +102,11 @@ class ECKeySigner(Signer):
             self._gsv.sign_init(self._num_sigs)
             self._hasher = hasher
 
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..', 'cuda', 'encoder.cuh')
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'cuda', 'encoder.cuh')
             
             if not hasattr(ECKeySigner, '_binToHex'):
-                _, [ECKeySigner._binToHex] = nvrtc.rtcompile(path, ['binToHex'])
+                _, [ECKeySigner._binToHex] = rtcompile(path, ['binToHex'])
 
     def __exit__(self):
         if self._device == 'gpu':

@@ -43,8 +43,9 @@ def rtcompile(srcPath: str, function_names: list[str], flags=''):
             b'--fmad=false', arch_arg,
             b'-I' + inclPath.encode(),
             b'-I/usr/local/cuda/include',
-            b'-D', bytes(flags),
         ]
+    if flags:
+        opts += [b'-D', bytes(flags, 'ascii')]
 
     with open(srcPath, 'r') as f:
         code = f.read()

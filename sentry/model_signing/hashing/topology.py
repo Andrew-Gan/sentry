@@ -2,7 +2,7 @@ from . import hashing, memory
 import numpy as np
 import cupy as cp
 from cuda.bindings import driver, runtime
-from ..cuda.nvrtc import rtcompile, checkCudaErrors
+from ..cuda.compiler import rtcompile, checkCudaErrors
 import collections
 import threading
 import os
@@ -10,18 +10,18 @@ from enum import Enum
 
 from typing_extensions import override
 
-srcPath = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+srcPath = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     'model_signing', 'cuda', 'topology')
 
 class SeqGPU(hashing.StreamingHashEngine):
     def __init__(self, hashAlgo):
         self.digestSize = hashAlgo.value[1]
         global srcPath
-        srcPath = os.path.join(srcPath, hashAlgo.value[0])
-        self.ctx, [self.hash] = rtcompile(srcPath, [f'hash'], hashAlgo.name)
+        myPath = os.path.join(srcPath, 'sequential.cuh')
+        self.ctx, [self.hash] = rtcompile(myPath, [f'hash'], hashAlgo.name)
     
     @override
-    def update(self, data: collections.OrderedDict, blockSize: int) -> None:
+    def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
         self.digest = bytes(self.digestSize)
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         total_size = sum(d.nbytes for d in data.values())
@@ -188,13 +188,13 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.digests = {}
         self.mode = mode
         global srcPath
-        srcPath = os.path.join(srcPath, 'merkle.cuh')
+        myPath = os.path.join(srcPath, 'merkle.cuh')
         if self.mode == 2:
             self.ctx, [self.hashBlock, self.reduce] = \
-                rtcompile(srcPath, ['hash_dict', 'reduce'], flags=hashAlgo.name)
+                rtcompile(myPath, ['hash_dict', 'reduce'], flags=hashAlgo.name)
         else:
             self.ctx, [self.hashBlock, self.reduce] = \
-                rtcompile(srcPath, ['hash_tensor', 'reduce'], flags=hashAlgo.name)
+                rtcompile(myPath, ['hash_tensor', 'reduce'], flags=hashAlgo.name)
     
     def _reduce_tree(self, nDigest, inputBuffer, outputBuffer, stream):
         inputBuffer = (inputBuffer, np.array([inputBuffer], dtype=np.uint64))
