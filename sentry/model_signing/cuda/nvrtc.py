@@ -24,7 +24,7 @@ def checkCudaErrors(result):
         return result[1:]
     
 
-def compile(srcPath: str, function_names: list[str]):
+def rtcompile(srcPath: str, function_names: list[str], flags=''):
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     if repr(ctx) == '<CUcontext 0x0>':
@@ -43,6 +43,7 @@ def compile(srcPath: str, function_names: list[str]):
             b'--fmad=false', arch_arg,
             b'-I' + inclPath.encode(),
             b'-I/usr/local/cuda/include',
+            b'-D', bytes(flags),
         ]
 
     with open(srcPath, 'r') as f:

@@ -12,9 +12,6 @@
  * This file is released into the Public Domain.
  */
 
-/****************************** MACROS ******************************/
-#include "_common.cuh"
-
 /**************************** DATA TYPES ****************************/
 
 typedef struct {
@@ -92,7 +89,7 @@ __device__  __forceinline__ void cuda_sha256_transform(SHA256_CTX *ctx, const ui
 	ctx->state[7] += h;
 }
 
-__device__ void cuda_sha256_init(SHA256_CTX *ctx)
+__device__ void init(SHA256_CTX *ctx)
 {
 	ctx->datalen = 0;
 	ctx->bitlen = 0;
@@ -106,7 +103,7 @@ __device__ void cuda_sha256_init(SHA256_CTX *ctx)
 	ctx->state[7] = 0x5be0cd19;
 }
 
-__device__ void cuda_sha256_update(SHA256_CTX *ctx, const uint8_t data[], uint64_t len)
+__device__ void update(SHA256_CTX *ctx, const uint8_t data[], uint64_t len)
 {
 	unsigned int i;
 
@@ -121,7 +118,7 @@ __device__ void cuda_sha256_update(SHA256_CTX *ctx, const uint8_t data[], uint64
 	}
 }
 
-__device__ void cuda_sha256_final(SHA256_CTX *ctx, uint8_t hash[])
+__device__ void final(SHA256_CTX *ctx, uint8_t hash[])
 {
 	unsigned int i;
 
@@ -167,21 +164,4 @@ __device__ void cuda_sha256_final(SHA256_CTX *ctx, uint8_t hash[])
 	}
 }
 
-extern "C" __global__
-void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
-	SHA256_CTX ctx;
-	sequential(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final);
-}
-
-extern "C" __global__
-void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
-	SHA256_CTX ctx;
-	merkle_pre(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32UL);
-}
-
-extern "C" __global__
-void reduce(uint8_t *out, uint8_t *in, size_t n) {
-	extern __shared__ uint8_t shMem[];
-	SHA256_CTX ctx;
-	merkle_step(cuda_sha256_init, cuda_sha256_update, cuda_sha256_final, 32UL);
-}
+typedef CTX SHA256_CTX

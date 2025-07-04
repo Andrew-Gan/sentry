@@ -7,11 +7,6 @@
  * This file is released into the Public Domain.
  */
 
-#ifndef __BLAKE2B_H__
-#define __BLAKE2B_H__
-
-#include "_common.cuh"
-
 #define BLAKE2B_ROUNDS 12
 #define BLAKE2B_BLOCK_LENGTH 128
 #define BLAKE2B_CHAIN_SIZE 8
@@ -118,8 +113,7 @@ __device__ __forceinline__ void cuda_blake2b_compress(BLAKE2B_CTX *ctx, unsigned
         ctx->chain[offset] ^= ctx->state[offset] ^ ctx->state[offset + 8];
 }
 
-__device__
-void cuda_blake2b_init(BLAKE2B_CTX *ctx) {
+__device__ void init(BLAKE2B_CTX *ctx) {
     memset(ctx, 0, sizeof(BLAKE2B_CTX));
     const unsigned long key = 0xFEDCBA9876543210UL;
     const unsigned long keylen = sizeof(key);
@@ -144,8 +138,7 @@ void cuda_blake2b_init(BLAKE2B_CTX *ctx) {
     ctx->pos = BLAKE2B_BLOCK_LENGTH;
 }
 
-__device__
-void cuda_blake2b_update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
+__device__ void update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
     if (inlen == 0)
         return;
 
@@ -186,8 +179,7 @@ void cuda_blake2b_update(BLAKE2B_CTX *ctx, unsigned char* in, long inlen) {
     ctx->pos += inlen - in_index;
 }
 
-__device__
-void cuda_blake2b_final(BLAKE2B_CTX *ctx, unsigned char* out) {
+__device__ void final(BLAKE2B_CTX *ctx, unsigned char* out) {
     ctx->f0 = 0xFFFFFFFFFFFFFFFFL;
     ctx->t0 += ctx->pos;
     if (ctx->pos > 0 && ctx->t0 == 0)
@@ -206,23 +198,4 @@ void cuda_blake2b_final(BLAKE2B_CTX *ctx, unsigned char* out) {
     }
 }
 
-extern "C" __global__
-void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
-    BLAKE2B_CTX ctx;
-	sequential(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final);
-}
-
-extern "C" __global__
-void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
-    BLAKE2B_CTX ctx;
-    merkle_pre(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 32UL);
-}
-
-extern "C" __global__
-void reduce(uint8_t *out, uint8_t *in, size_t n) {
-	extern __shared__ uint8_t shMem[];
-    BLAKE2B_CTX ctx;
-	merkle_step(cuda_blake2b_init, cuda_blake2b_update, cuda_blake2b_final, 32UL);
-}
-
-#endif
+typedef CTX BLAKE2B_CTX

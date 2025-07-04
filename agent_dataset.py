@@ -1,6 +1,5 @@
 import dataset_formatter.formatter as formatter
 import sys
-import os
 
 if __name__ == '__main__':
     try:

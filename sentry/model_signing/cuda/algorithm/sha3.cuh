@@ -7,8 +7,6 @@
  * This file is released into the Public Domain.
  */
 
-#include "_common.cuh"
-
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
@@ -243,7 +241,7 @@ __device__ void cuda_sha3_pad(SHA3_CTX *ctx)
 /*
  * Digestbitlen must be 128 224 256 288 384 512
  */
-__device__ void cuda_sha3_init(SHA3_CTX *ctx)
+__device__ void init(SHA3_CTX *ctx)
 {
     memset(ctx, 0, sizeof(SHA3_CTX));
     ctx->sha3_flag = 0;
@@ -254,7 +252,7 @@ __device__ void cuda_sha3_init(SHA3_CTX *ctx)
     ctx->bits_in_queue = 0;
 }
 
-__device__ void cuda_sha3_update(SHA3_CTX *ctx, uint8_t *in, unsigned long inlen)
+__device__ void update(SHA3_CTX *ctx, uint8_t *in, unsigned long inlen)
 {
     long bytes = ctx->bits_in_queue >> 3;
     long count = 0;
@@ -280,7 +278,7 @@ __device__ void cuda_sha3_update(SHA3_CTX *ctx, uint8_t *in, unsigned long inlen
     ctx->bits_in_queue = bytes << 3;
 }
 
-__device__ void cuda_sha3_final(SHA3_CTX *ctx, uint8_t *out)
+__device__ void final(SHA3_CTX *ctx, uint8_t *out)
 {
     if (ctx->sha3_flag) {
         int mask = (1 << 2) - 1;
@@ -305,23 +303,4 @@ __device__ void cuda_sha3_final(SHA3_CTX *ctx, uint8_t *out)
     }
 }
 
-extern "C" __global__
-void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
-    SHA3_CTX ctx;
-    sequential(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final);
-}
-
-// first mapping of blocks to digests at the leaves layer
-extern "C" __global__
-void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
-    SHA3_CTX ctx;
-    merkle_pre(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 32UL);
-}
-
-// // subsequent halving of merkle tree until one digest remains per threadblock
-extern "C" __global__
-void reduce(uint8_t *out, uint8_t *in, uint64_t n) {
-	extern __shared__ uint8_t shMem[];
-    SHA3_CTX ctx;
-	merkle_step(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 32UL);
-}
+typedef CTX SHA3_CTX
