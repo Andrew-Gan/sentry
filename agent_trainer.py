@@ -1,5 +1,6 @@
 import os
 from common import get_model, get_image_dataloader
+from sentry.model_signing.hashing.topology import HashAlgo, Topology
 import sentry.signer
 
 if __name__ == '__main__':
@@ -18,7 +19,10 @@ if __name__ == '__main__':
         # pred = model(x)
     # print('[Trainer] Model training complete')
 
-    sentry.signer.sign_model(model)
+    sentry.signer.sign_model(model, HashAlgo.SHA256, Topology.MERKLE_COALESCED)
+    print('[Trainer] Model signing complete')
+
+    sentry.signer.sign_model(model, HashAlgo.SHA256, Topology.MERKLE_COALESCED)
     print('[Trainer] Model signing complete')
 
     # sentry.signer.sign_dataset(hasher.compute())

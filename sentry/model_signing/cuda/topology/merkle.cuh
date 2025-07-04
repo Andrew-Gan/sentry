@@ -1,7 +1,7 @@
 #if defined(SHA256)
     #include "../algorithm/sha256.cuh"
-#elif defined(BLAKE2)
-    #include "../algorithm/blake2.cuh"
+#elif defined(BLAKE2B)
+    #include "../algorithm/blake2b.cuh"
 #elif defined(SHA3)
     #include "../algorithm/sha3.cuh"
 #endif
