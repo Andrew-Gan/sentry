@@ -8,55 +8,60 @@
 
 #define OUT_BYTES 32UL
 
+#if defined(MERKLE_COALESCED) || defined(MERKLE_LAYERED)
 extern "C" __global__
-void hash_tensor(unsigned char *out, unsigned char *in, unsigned long blockSize, unsigned long size) {
-	CTX ctx;
-    unsigned long idx = blockIdx.x * blockDim.x + threadIdx.x;
-    unsigned char *myIn = in + idx * blockSize;
-    unsigned long rem = (in + size) - myIn;
-	if (myIn < in + size) {
+void hash_block(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nbytes) {
+    CTX ctx;
+    uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    uint8_t *myIn = in + idx * blockSize;
+    uint64_t rem = (in + nbytes) - myIn;
+    if (myIn < in + nbytes) {
         init(&ctx);
         update(&ctx, myIn, rem < blockSize ? rem : blockSize);
         final(&ctx, &out[idx * OUT_BYTES]);
     }
 }
 
+#elif defined(MERKLE_INPLACE)
+
 extern "C" __global__
-void hash_dict(unsigned char *out, unsigned long blockSize, unsigned long *startThread,
-	unsigned long *workSize, unsigned char **workAddr, unsigned long l, unsigned long n) {
-	CTX ctx;
-    unsigned long idx = blockIdx.x * blockDim.x + threadIdx.x;
-	if (idx < n) {
+void hash_block(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
+    uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t nThread) {
+    CTX ctx;
+    uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < nThread) {
         init(&ctx);
-		unsigned long workId = 0;
-		while (workId < l && idx >= startThread[workId]) {
-			workId++;
-		}
-		workId--;
-		unsigned char *my_in = workAddr[workId] + blockSize * (idx - startThread[workId]);
-		unsigned char *workEnd = workAddr[workId] + workSize[workId];
-		update(&ctx, my_in, blockSize < workEnd - my_in ? blockSize : workEnd - my_in);
+        uint64_t workId = 0;
+        while (workId < l && idx >= startThread[workId]) {
+            workId++;
+        }
+        workId--;
+        uint8_t *my_in = workAddr[workId] + blockSize * (idx - startThread[workId]);
+        uint8_t *workEnd = workAddr[workId] + workSize[workId];
+        update(&ctx, my_in, blockSize < workEnd - my_in ? blockSize : workEnd - my_in);
     }
     __syncthreads();
-	if (idx < n)
+    if (idx < nThread)
         final(&ctx, &out[idx * OUT_BYTES]);
 }
 
+#endif
+
 extern "C" __global__
-void reduce(unsigned char *out, unsigned char *in, size_t n) {
-	extern __shared__ unsigned char shMem[];
-	CTX ctx;
-	int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
-	int locIdx = threadIdx.x;
-	int activeThreads = min((unsigned long)blockDim.x, n - (blockIdx.x * blockDim.x));
+void reduce(uint8_t *out, uint8_t *in, uint64_t n) {
+    extern __shared__ uint8_t shMem[];
+    CTX ctx;
+    int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
+    int locIdx = threadIdx.x;
+    int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x));
     if (locIdx == 0)
         memset(&shMem[(blockDim.x)*OUT_BYTES], 0, OUT_BYTES);
     if (locIdx < activeThreads) {
         init(&ctx);
-		update(&ctx, &in[(2*glbIdx)*OUT_BYTES], OUT_BYTES);
-		update(&ctx, &in[(2*glbIdx+1)*OUT_BYTES], OUT_BYTES);
+        update(&ctx, &in[(2*glbIdx)*OUT_BYTES], OUT_BYTES);
+        update(&ctx, &in[(2*glbIdx+1)*OUT_BYTES], OUT_BYTES);
         final(&ctx, &shMem[locIdx*OUT_BYTES]);
-	}
+    }
     __syncthreads();
     if (activeThreads > 1) {
         activeThreads = (activeThreads + 1) / 2;

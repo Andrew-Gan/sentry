@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-#ifndef __BLAKE2XB_H__
-#define __BLAKE2XB_H__
-
+#include <cuda/std/cstdint>
 #include "blake2b.cuh"
 
 #define kMinOutputLength 1
@@ -115,5 +113,3 @@ void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
         remaining -= len;
     }
 }
-
-#endif

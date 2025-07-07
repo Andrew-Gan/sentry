@@ -28,7 +28,7 @@ from .model_signing.signing import in_toto
 from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .model_signing.hashing.topology import get_hasher, HashAlgo, Topology, InputType
+from .model_signing.hashing.topology import *
 import collections
 
 log = logging.getLogger(__name__)
@@ -127,7 +127,7 @@ def _get_payload_signer(args: argparse.Namespace, device='gpu', num_sigs=1) -> s
         _check_private_key_options(args)
         signerHasher = None
         if device == 'gpu':
-            signerHasher = get_hasher(HashAlgo.SHA256, Topology.MERKLE_LAYERED, InputType.DIGEST, device)
+            signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED)
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,
@@ -228,7 +228,7 @@ def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
         ignore_paths=[args.sig_out],
     )[0]
     end = time.perf_counter()
-    print(f'Duration: {1000*(end-start):.2f}')
+    print(f'Duration: {1000*(end-start):.2f} ms')
     sig.write(args.sig_out / pathlib.Path('model.sig'))
 
 
