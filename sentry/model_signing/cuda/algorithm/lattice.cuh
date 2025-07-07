@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-#ifndef __LTHASH_H__
-#define __LTHASH_H__
 
 #include "blake2xb.cuh"
 
@@ -125,4 +123,3 @@ void reduce_ltHash(uint64_t *out, uint64_t *in, uint64_t n) {
     }
 }
 
-#endif

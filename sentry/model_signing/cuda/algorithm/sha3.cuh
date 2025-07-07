@@ -7,13 +7,13 @@
  * This file is released into the Public Domain.
  */
 
-#include "_common.cuh"
+#include <cuda/std/cstdint>
 
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
 
-__constant__ unsigned long CUDA_KECCAK_CONSTS[24] = {
+__constant__ uint64_t CUDA_KECCAK_CONSTS[24] = {
     0x0000000000000001, 0x0000000000008082, 0x800000000000808a, 0x8000000080008000,
     0x000000000000808b, 0x0000000080000001, 0x8000000080008081, 0x8000000000008009,
     0x000000000000008a, 0x0000000000000088, 0x0000000080008009, 0x000000008000000a,
@@ -24,20 +24,20 @@ __constant__ unsigned long CUDA_KECCAK_CONSTS[24] = {
 
 typedef struct {
     uint8_t sha3_flag;
-    unsigned int digestbitlen;
-    unsigned long rate_bits;
-    unsigned long rate_bytes;
-    unsigned long absorb_round;
+    uint32_t digestbitlen;
+    uint64_t rate_bits;
+    uint64_t rate_bytes;
+    uint64_t absorb_round;
 
     long state[KECCAK_STATE_SIZE];
     uint8_t q[KECCAK_Q_SIZE];
 
-    unsigned long bits_in_queue;
+    uint64_t bits_in_queue;
 } SHA3_CTX;
 
-__device__ unsigned long cuda_sha3_leuint64(void *in)
+__device__ uint64_t cuda_sha3_leuint64(void *in)
 {
-    unsigned long a;
+    uint64_t a;
     memcpy(&a, in, 8);
     return a;
 }
@@ -48,7 +48,7 @@ __device__ long cuda_sha3_MIN(long a, long b)
     return a;
 }
 
-__device__ unsigned long cuda_sha3_UMIN(unsigned long a, unsigned long b)
+__device__ uint64_t cuda_sha3_UMIN(uint64_t a, uint64_t b)
 {
     if (a > b) return b;
     return a;
@@ -56,9 +56,9 @@ __device__ unsigned long cuda_sha3_UMIN(unsigned long a, unsigned long b)
 
 __device__ void cuda_sha3_extract(SHA3_CTX *ctx)
 {
-    unsigned long len = ctx->rate_bits >> 6;
+    uint64_t len = ctx->rate_bits >> 6;
     long a;
-    int s = sizeof(unsigned long);
+    int s = sizeof(uint64_t);
 
     for (int i = 0;i < len;i++) {
         a = cuda_sha3_leuint64((long*)&ctx->state[i]);
@@ -66,7 +66,7 @@ __device__ void cuda_sha3_extract(SHA3_CTX *ctx)
     }
 }
 
-__device__ __forceinline__ unsigned long cuda_sha3_ROTL64(unsigned long a, unsigned long  b)
+__device__ __forceinline__ uint64_t cuda_sha3_ROTL64(uint64_t a, uint64_t  b)
 {
     return (a << b) | (a >> (64 - b));
 }
@@ -200,8 +200,8 @@ __device__ void cuda_sha3_permutations(SHA3_CTX * ctx)
 __device__ void cuda_sha3_absorb(SHA3_CTX *ctx, uint8_t* in)
 {
 
-    unsigned long offset = 0;
-    for (unsigned long i = 0; i < ctx->absorb_round; ++i) {
+    uint64_t offset = 0;
+    for (uint64_t i = 0; i < ctx->absorb_round; ++i) {
         ctx->state[i] ^= cuda_sha3_leuint64(in + offset);
         offset += 8;
     }
@@ -218,17 +218,17 @@ __device__ void cuda_sha3_pad(SHA3_CTX *ctx)
         ctx->bits_in_queue = 0;
     }
 
-    unsigned long full = ctx->bits_in_queue >> 6;
-    unsigned long partial = ctx->bits_in_queue & 63;
+    uint64_t full = ctx->bits_in_queue >> 6;
+    uint64_t partial = ctx->bits_in_queue & 63;
 
-    unsigned long offset = 0;
+    uint64_t offset = 0;
     for (int i = 0; i < full; ++i) {
         ctx->state[i] ^= cuda_sha3_leuint64(ctx->q + offset);
         offset += 8;
     }
 
     if (partial > 0) {
-        unsigned long mask = (1L << partial) - 1;
+        uint64_t mask = (1L << partial) - 1;
         ctx->state[full] ^= cuda_sha3_leuint64(ctx->q + offset) & mask;
     }
 
@@ -243,7 +243,7 @@ __device__ void cuda_sha3_pad(SHA3_CTX *ctx)
 /*
  * Digestbitlen must be 128 224 256 288 384 512
  */
-__device__ void cuda_sha3_init(SHA3_CTX *ctx)
+__device__ void init(SHA3_CTX *ctx)
 {
     memset(ctx, 0, sizeof(SHA3_CTX));
     ctx->sha3_flag = 0;
@@ -254,7 +254,7 @@ __device__ void cuda_sha3_init(SHA3_CTX *ctx)
     ctx->bits_in_queue = 0;
 }
 
-__device__ void cuda_sha3_update(SHA3_CTX *ctx, uint8_t *in, unsigned long inlen)
+__device__ void update(SHA3_CTX *ctx, uint8_t *in, uint64_t inlen)
 {
     long bytes = ctx->bits_in_queue >> 3;
     long count = 0;
@@ -280,7 +280,7 @@ __device__ void cuda_sha3_update(SHA3_CTX *ctx, uint8_t *in, unsigned long inlen
     ctx->bits_in_queue = bytes << 3;
 }
 
-__device__ void cuda_sha3_final(SHA3_CTX *ctx, uint8_t *out)
+__device__ void final(SHA3_CTX *ctx, uint8_t *out)
 {
     if (ctx->sha3_flag) {
         int mask = (1 << 2) - 1;
@@ -289,7 +289,7 @@ __device__ void cuda_sha3_final(SHA3_CTX *ctx, uint8_t *out)
     }
 
     cuda_sha3_pad(ctx);
-    unsigned long i = 0;
+    uint64_t i = 0;
 
     while (i < ctx->digestbitlen) {
         if (ctx->bits_in_queue == 0) {
@@ -298,30 +298,11 @@ __device__ void cuda_sha3_final(SHA3_CTX *ctx, uint8_t *out)
             ctx->bits_in_queue = ctx->rate_bits;
         }
 
-        unsigned long partial_block = cuda_sha3_UMIN(ctx->bits_in_queue, ctx->digestbitlen - i);
+        uint64_t partial_block = cuda_sha3_UMIN(ctx->bits_in_queue, ctx->digestbitlen - i);
         memcpy(out + (i >> 3), ctx->q + (ctx->rate_bytes - (ctx->bits_in_queue >> 3)), partial_block >> 3);
         ctx->bits_in_queue -= partial_block;
         i += partial_block;
     }
 }
 
-extern "C" __global__
-void seq(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t n) {
-    SHA3_CTX ctx;
-    sequential(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final);
-}
-
-// first mapping of blocks to digests at the leaves layer
-extern "C" __global__
-void hash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
-    SHA3_CTX ctx;
-    merkle_pre(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 32UL);
-}
-
-// // subsequent halving of merkle tree until one digest remains per threadblock
-extern "C" __global__
-void reduce(uint8_t *out, uint8_t *in, uint64_t n) {
-	extern __shared__ uint8_t shMem[];
-    SHA3_CTX ctx;
-	merkle_step(cuda_sha3_init, cuda_sha3_update, cuda_sha3_final, 32UL);
-}
+typedef SHA3_CTX CTX;

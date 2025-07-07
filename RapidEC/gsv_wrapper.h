@@ -1,7 +1,7 @@
 #ifndef _GSV_WRAPPER_H_
 #define _GSV_WRAPPER_H_
 
-#include <cstdint>
+#include <cuda/std/cstdint>
 
 #define GSV_TPI 4
 #define GSV_BITS 256

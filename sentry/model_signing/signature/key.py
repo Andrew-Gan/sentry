@@ -34,9 +34,8 @@ import torch
 import re
 import numpy as np
 import cupy as cp
-from ..cuda import mycuda
 from cuda.bindings import driver
-from ..cuda.mycuda import checkCudaErrors
+from ..cuda.compiler import rtcompile, checkCudaErrors
 import os
 
 
@@ -83,7 +82,7 @@ def load_ec_private_key(
 class ECKeySigner(Signer):
     """Provides a Signer using an elliptic curve private key for signing."""
 
-    def __init__(self, private_key: ec.EllipticCurvePrivateKey, device='cpu',
+    def __init__(self, private_key: ec.EllipticCurvePrivateKey, device='gpu',
                  num_sigs=1, hasher=None):
 
         self._private_key = private_key
@@ -103,18 +102,18 @@ class ECKeySigner(Signer):
             self._gsv.sign_init(self._num_sigs)
             self._hasher = hasher
 
-            path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                '..', 'cuda', 'encoder.cuh')
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'cuda', 'encoder.cuh')
             
             if not hasattr(ECKeySigner, '_binToHex'):
-                _, [ECKeySigner._binToHex] = mycuda.compile(path, ['binToHex'])
+                _, [ECKeySigner._binToHex] = rtcompile(path, ['binToHex'])
 
     def __exit__(self):
         if self._device == 'gpu':
             self._gsv.sign_close(self._num_sigs)
 
     @classmethod
-    def from_path(cls, key_path: str, password: str = None, device='cpu',
+    def from_path(cls, key_path: str, password: str = None, device='gpu',
                   num_sigs=1, hasher=None):
         private_key = load_ec_private_key(key_path, password)
         return cls(private_key, device, num_sigs, hasher)
@@ -212,7 +211,7 @@ class ECKeySigner(Signer):
 class ECKeyVerifier(Verifier):
     """Provides a verifier using a public key."""
 
-    def __init__(self, public_key: ec.EllipticCurvePublicKey, device='cpu',
+    def __init__(self, public_key: ec.EllipticCurvePublicKey, device='gpu',
                  num_sigs=1, hasher=None):
 
         self._public_key = public_key
@@ -236,7 +235,7 @@ class ECKeyVerifier(Verifier):
             self._gsv.verify_close(self._num_sigs)
 
     @classmethod
-    def from_path(cls, key_path: str, device='cpu', num_sigs=1, hasher=None):
+    def from_path(cls, key_path: str, device='gpu', num_sigs=1, hasher=None):
         with open(key_path, "rb") as fd:
             serialized_key = fd.read()
         public_key = load_pem_public_key(serialized_key)

@@ -29,7 +29,7 @@ from .model_signing.signature import verifying
 from .model_signing.signing import in_toto, in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
-from .compile import HashAlgo, Topology, InputType, get_hasher
+from .model_signing.hashing.topology import *
 import collections
 
 log = logging.getLogger(__name__)
@@ -98,13 +98,12 @@ def _arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _get_verifier(args: argparse.Namespace, device='cpu', num_sigs=1) -> signing.Verifier:
+def _get_verifier(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing.Verifier:
     if args.method == "private-key":
         _check_private_key_flags(args)
         verifierHasher = None
         if device == 'gpu':
-            verifierHasher = get_hasher(HashAlgo.SHA256, Topology.SERIAL, InputType.MODULE)
-
+            signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED)
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         if device == 'cpu':
             return in_toto_signature.IntotoVerifier(verifier)
@@ -173,7 +172,7 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs
     return hasher, verifier, serializer
 
 
-def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE):
+def verify_model(item, hashAlgo : HashAlgo, topology : Topology):
     args = _arguments()
     args.sig_path = args.sig_path / pathlib.Path('model.sig')
     sig = _get_signature(args)

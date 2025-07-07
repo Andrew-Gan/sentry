@@ -24,7 +24,7 @@ def checkCudaErrors(result):
         return result[1:]
     
 
-def compile(srcPath: str, function_names: list[str]):
+def rtcompile(srcPath: str, function_names: list[str], flags=[]):
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     if repr(ctx) == '<CUcontext 0x0>':
@@ -44,12 +44,14 @@ def compile(srcPath: str, function_names: list[str]):
             b'-I' + inclPath.encode(),
             b'-I/usr/local/cuda/include',
         ]
+    for flag in flags:
+        opts.append(bytes(f'-D{flag}', 'ascii'))
 
     with open(srcPath, 'r') as f:
         code = f.read()
     # parse cuda code from file
     prog = checkCudaErrors(nvrtc.nvrtcCreateProgram(str.encode(code), 
-        bytes(srcPath[-1], 'utf-8'), 0, [], []))
+        bytes(srcPath, 'utf-8'), 0, [], []))
     
     # compile code into program and extract ptx
     err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)

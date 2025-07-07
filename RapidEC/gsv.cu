@@ -2,7 +2,7 @@
 // #include <gmp.h>
 
 // #include <chrono>
-// #include <cstdint>
+// #include <cuda/std/cstdint>
 // #include <cstdio>
 // #include <cstdlib>
 
@@ -11,7 +11,7 @@
 #include "support.h"
 
 // redefine alias
-#define uint32_t unsigned int
+#define uint32_t uint32_t
 
 #define MAX_SIG 8
 
