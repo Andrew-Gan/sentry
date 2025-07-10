@@ -16,7 +16,7 @@ ENV CUFILE_ENV_PATH_JSON=/home/cufile.json
 COPY sentry /home/sentry
 
 WORKDIR /home
-COPY *.py /home
+COPY *.py hf_access_token /home
 
 RUN openssl ecparam -name prime256v1 -genkey -noout -out private.pem
 RUN openssl ec -in private.pem -pubout -out public.pem

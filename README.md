@@ -69,6 +69,11 @@ nvcc -Xcompiler '-fPIC' -o ./RapidEC/gsv.so -shared ./RapidEC/gsv.cu
 mkdir -p ./signatures
 ```
 
+### Huggingface login
+Some ML models from huggingface require a user to be logged in to avoid timeout errors.  
+Create an account and follow the [guide](https://huggingface.co/docs/hub/en/security-tokens) to acquire your access token.  
+Then, place the access token in the file named 'hf_access_token'.
+
 ## Run
 
 ### Docker

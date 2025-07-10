@@ -219,7 +219,6 @@ def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
     else:
         raise TypeError('item is neither str nor torch module')
 
-    start = time.perf_counter()
     sig = model.sign(
         item=item,
         signer=signer,
@@ -227,8 +226,6 @@ def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
         serializer=serializer,
         ignore_paths=[args.sig_out],
     )[0]
-    end = time.perf_counter()
-    print(f'Duration: {1000*(end-start):.2f} ms')
     sig.write(args.sig_out / pathlib.Path('model.sig'))
 
 

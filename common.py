@@ -2,7 +2,7 @@ from nvidia.dali.pipeline import pipeline_def
 import nvidia.dali.fn as fn
 from nvidia.dali.plugin.pytorch import DALIGenericIterator
 import torch
-from sentry.model_signing.hashing.topology import HashAlgo, Topology, InputType
+from sentry.model_signing.hashing.topology import *
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 import torchvision
@@ -18,6 +18,7 @@ def hash_batch(data: list, metadata: list):
 
 # TORCH HUB: load pretrained ML model and save to file
 def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
+    model_name = model_name.lower()
     if model_name == 'resnet152':
         model = AutoModelForImageClassification.from_pretrained("microsoft/resnet-152")
     elif model_name == 'bert':
@@ -31,15 +32,13 @@ def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
     else:
         raise NotImplementedError(f'Fetching of {model_name} not implemented')
 
-    modelPath = './model.pth'
-    torch.save(model, modelPath)
-    return model.to('cuda' if device=='gpu' else device), modelPath
+    return model.to('cuda' if device=='gpu' else device)
 
 def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
-        hash_batch.hasher = memory.HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
+        hash_batch.hasher = topology.HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_images():

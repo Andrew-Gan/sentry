@@ -24,7 +24,7 @@ def checkCudaErrors(result):
         return result[1:]
     
 
-def rtcompile(srcPath: str, function_names: list[str], flags=[]):
+def compileCuda(srcPath: str, function_names: list[str], flags=[]):
     cuDevice = checkCudaErrors(runtime.cudaGetDevice())
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     if repr(ctx) == '<CUcontext 0x0>':

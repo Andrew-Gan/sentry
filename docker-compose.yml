@@ -1,7 +1,6 @@
 services:
   sentry_dataset: &sentry
-    build:
-      dockerfile: sentry.dockerfile
+    build: .
     image: sentry:latest
     ulimits:
       nofile:

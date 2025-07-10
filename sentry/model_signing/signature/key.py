@@ -35,7 +35,7 @@ import re
 import numpy as np
 import cupy as cp
 from cuda.bindings import driver
-from ..cuda.compiler import rtcompile, checkCudaErrors
+from ..cuda.compiler import compileCuda, checkCudaErrors
 import os
 
 
@@ -106,7 +106,7 @@ class ECKeySigner(Signer):
                                 'cuda', 'encoder.cuh')
             
             if not hasattr(ECKeySigner, '_binToHex'):
-                _, [ECKeySigner._binToHex] = rtcompile(path, ['binToHex'])
+                _, [ECKeySigner._binToHex] = compileCuda(path, ['binToHex'])
 
     def __exit__(self):
         if self._device == 'gpu':

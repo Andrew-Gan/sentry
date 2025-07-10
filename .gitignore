@@ -16,3 +16,4 @@ cufile.log
 .vscode
 signatures
 torch
+hf_access_token

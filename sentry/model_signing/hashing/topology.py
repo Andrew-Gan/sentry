@@ -2,7 +2,7 @@ from . import hashing, memory
 import numpy as np
 import cupy as cp
 from cuda.bindings import driver, runtime
-from ..cuda.compiler import rtcompile, checkCudaErrors
+from ..cuda.compiler import compileCuda, checkCudaErrors
 import collections
 import threading
 import os
@@ -40,7 +40,7 @@ class SeqGPU(hashing.StreamingHashEngine):
         self.digestSize = hashAlgo.value[1]
         global srcPath
         myPath = os.path.join(srcPath, 'serial.cuh')
-        self.ctx, [self.hash] = rtcompile(myPath, [f'hash'], [hashAlgo.name])
+        self.ctx, [self.hash] = compileCuda(myPath, [f'hash'], [hashAlgo.name])
     
     @override
     def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
@@ -213,7 +213,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         global srcPath
         myPath = os.path.join(srcPath, 'merkle.cuh')
         self.ctx, [self.hashBlock, self.reduce] = \
-            rtcompile(myPath, ['hash_block', 'reduce'], [hashAlgo.name, topology.name])
+            compileCuda(myPath, ['hash_block', 'reduce'], [hashAlgo.name, topology.name])
     
     def _reduce_tree(self, nDigest, inputBuffer, outputBuffer, stream):
         inputBuffer = (inputBuffer, np.array([inputBuffer], dtype=np.uint64))
@@ -236,7 +236,6 @@ class MerkleGPU(hashing.StreamingHashEngine):
     
     @override
     def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
-        print(self.topology.name)
         if self.topology == Topology.MERKLE_COALESCED: # coalesced
             self.update_coalesced(data, blockSize)
         elif self.topology == Topology.MERKLE_LAYERED: # separated
@@ -429,10 +428,10 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         global srcPath
         srcPath = os.path.join(srcPath, hashAlgo.value[0])
         if inputType == InputType.MODULE:
-            self.ctx, [self.hashBlock, self.adder] = rtcompile(srcPath,
+            self.ctx, [self.hashBlock, self.adder] = compileCuda(srcPath,
                 ['hash_ltHash', 'reduce_ltHash'])
         elif inputType == InputType.DIGEST:
-            self.ctx, [self.hashBlock, self.adder] = rtcompile(srcPath,
+            self.ctx, [self.hashBlock, self.adder] = compileCuda(srcPath,
                 ['hash_dataset_ltHash', 'reduce_ltHash'])
     
     def __exit__(self):
