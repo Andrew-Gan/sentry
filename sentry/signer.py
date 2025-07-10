@@ -126,17 +126,13 @@ def _get_payload_signer(args: argparse.Namespace, device='gpu', num_sigs=1) -> s
     if args.method == "private-key":
         _check_private_key_options(args)
         signerHasher = None
-        if device == 'gpu':
-            signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED)
+        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,
             num_sigs=num_sigs,
             hasher=signerHasher)
-        if device == 'cpu':
-            return in_toto_signature.IntotoSigner(payload_signer)
-        elif device == 'gpu':
-            return in_toto_signature.IntotoSigner(payload_signer)
+        return in_toto_signature.IntotoSigner(payload_signer)
 
     elif args.method == "pki":
         _check_pki_options(args)

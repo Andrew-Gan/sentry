@@ -101,14 +101,9 @@ def _arguments() -> argparse.Namespace:
 def _get_verifier(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing.Verifier:
     if args.method == "private-key":
         _check_private_key_flags(args)
-        verifierHasher = None
-        if device == 'gpu':
-            signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED)
+        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
-        if device == 'cpu':
-            return in_toto_signature.IntotoVerifier(verifier)
-        elif device == 'gpu':
-            return in_toto_signature.IntotoVerifier(verifier)
+        return in_toto_signature.IntotoVerifier(verifier)
 
     elif args.method == "pki":
         _check_pki_flags(args)
