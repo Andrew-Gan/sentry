@@ -38,7 +38,7 @@ def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
-        hash_batch.hasher = topology.HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
+        hash_batch.hasher = HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_images():
@@ -47,11 +47,10 @@ def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str
         metadata = fn.readers.numpy(file_root=meta_path, random_shuffle=True,
             device='cpu' if not gds else device, name='Reader2', seed=0)
         
-        if device == 'gpu' and not gds:
-            data = fn.copy(data, device='gpu')
-            metadata = fn.copy(metadata, device='gpu')
-
         if device == 'gpu':
+            if not gds:
+                data = fn.copy(data, device='gpu')
+                metadata = fn.copy(metadata, device='gpu')
             fn.python_function(data, metadata, batch_processing=True,
                 function=hash_batch, num_outputs=0, device='gpu')
 
@@ -77,7 +76,7 @@ def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str,
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
-        hash_batch.hasher = memory.HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
+        hash_batch.hasher = HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_texts():

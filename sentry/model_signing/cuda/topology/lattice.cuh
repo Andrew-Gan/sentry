@@ -15,7 +15,7 @@
  */
 
 
-#include "blake2xb.cuh"
+#include "../algorithm/blake2xb.cuh"
 
 __device__
 void add(const uint64_t b1, const uint64_t b2, uint64_t *out) {

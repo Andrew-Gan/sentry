@@ -61,7 +61,7 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
         uint8_t block[128];
         memcpy(block, key, key_nBytes);
         memset(block + key_nBytes, 0, 128 - key_nBytes);
-        cuda_blake2b_update(&ctx->blake2b_ctx, block, 128);
+        update(&ctx->blake2b_ctx, block, 128);
         memset(block, 0, 128); // erase key from stack
     }
 }
@@ -87,13 +87,13 @@ void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint64_t outputLength,
 
 __device__
 void cuda_blake2xb_update(BLAKE2XB_CTX *ctx, uint8_t *data, uint64_t data_nBytes) {
-    cuda_blake2b_update(&ctx->blake2b_ctx, data, data_nBytes);
+    update(&ctx->blake2b_ctx, data, data_nBytes);
 }
 
 __device__
 void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
     uint8_t h0[BLAKE2B_BYTES_MAX];
-    cuda_blake2b_final(&ctx->blake2b_ctx, h0);
+    final(&ctx->blake2b_ctx, h0);
 
     ctx->blake2b_ctx.keylen = 0;
     ctx->fanout = 0;
@@ -107,8 +107,8 @@ void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
         uint64_t len = BLAKE2B_BYTES_MAX < remaining ? BLAKE2B_BYTES_MAX : remaining;
         ctx->blake2b_ctx.digestlen = (uint8_t)len;
         initStateFromParams(ctx, nullptr, 0);
-        cuda_blake2b_update(&ctx->blake2b_ctx, h0, BLAKE2B_BYTES_MAX);
-        cuda_blake2b_final(&ctx->blake2b_ctx, out + pos);
+        update(&ctx->blake2b_ctx, h0, BLAKE2B_BYTES_MAX);
+        final(&ctx->blake2b_ctx, out + pos);
         pos += len;
         remaining -= len;
     }
