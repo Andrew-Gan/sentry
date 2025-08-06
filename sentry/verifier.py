@@ -144,6 +144,7 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
 def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs=1):
     args = _arguments()
     verifier = _get_verifier(args, dev, num_sigs)
+    hasher = None
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(

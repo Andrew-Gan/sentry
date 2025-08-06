@@ -22,8 +22,8 @@ if __name__ == '__main__':
 
     samples = load_dataset(dataset_name)['train']
     if dataset_name == 'uoft-cs/cifar10':
-        write_cifar10_data(path, samples, num_participants, alpha)
+        formatter.write_cifar10_data(path, samples, num_sources, alpha)
     elif dataset_name == 'Rowan/hellaswag':
-        write_hellaswag_data(path, samples)
+        formatter.write_hellaswag_data(path, samples)
     else:
         raise NotImplementedError('Dataset processing not implemented')

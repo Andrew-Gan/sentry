@@ -426,12 +426,12 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
         self.totalSum = (totalSum, np.array([totalSum], dtype=np.uint64))
 
         global srcPath
-        srcPath = os.path.join(srcPath, hashAlgo.value[0])
+        myPath = os.path.join(srcPath, hashAlgo.value[0])
         if inputType == InputType.MODULE:
-            self.ctx, [self.hashBlock, self.adder] = compileCuda(srcPath,
+            self.ctx, [self.hashBlock, self.adder] = compileCuda(myPath,
                 ['hash_ltHash', 'reduce_ltHash'])
         elif inputType == InputType.DIGEST:
-            self.ctx, [self.hashBlock, self.adder] = compileCuda(srcPath,
+            self.ctx, [self.hashBlock, self.adder] = compileCuda(myPath,
                 ['hash_dataset_ltHash', 'reduce_ltHash'])
     
     def __exit__(self):

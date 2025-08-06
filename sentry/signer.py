@@ -179,6 +179,7 @@ def _check_pki_options(args: argparse.Namespace):
 def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
     args = _arguments()
     payload_signer = _get_payload_signer(args, device, num_sigs)
+    hasher = None
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(
@@ -200,8 +201,6 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='
             state_hasher_factory=hasher_factory)
 
     return hasher, payload_signer, serializer
-
-import time
 
 def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
     args = _arguments()
@@ -226,7 +225,7 @@ def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
 
 
 def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
-    _, signer, serializer = build(hashAlgo, topology, InputType.DIGEST, len(item))
+    _, signer, serializer = build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
     args = _arguments()
     sigs = model.sign(
         item=item,

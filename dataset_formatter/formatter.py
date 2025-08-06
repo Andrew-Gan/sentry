@@ -1,6 +1,7 @@
 from collections import defaultdict
 import random
 import numpy as np
+import os
 
 def sample_dirichlet(train_dataset, num_participants, alpha, force=False):
     tr_classes = {}

@@ -5,7 +5,7 @@ import sentry.verifier
 
 if __name__ == '__main__':
     with open('hf_access_token', 'r') as f:
-        login(token=f.read())
+        login(token=f.read().rstrip())
         model = get_model('vgg19', pretrained=True, device='gpu')
 
         dataloader, hasher = get_image_dataloader(

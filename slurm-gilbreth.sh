@@ -1,5 +1,6 @@
 #!/bin/bash
 
+module --force purge
 module load cuda gcc
 source .venv/bin/activate
 

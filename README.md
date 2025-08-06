@@ -40,7 +40,7 @@ can check for themselves that these claims are true rather than having to just
 trust the model trainer.
 
 ## Setup
-We support three ways of running Sentry: Docker, Slurm and native run.
+We support three ways of running Sentry: Docker and native run.
 
 ### Docker
 [Docker](https://docs.docker.com/get-started/get-docker/)  
@@ -50,7 +50,7 @@ We support three ways of running Sentry: Docker, Slurm and native run.
 mkdir -p ./signatures
 ```
 
-### Slurm and native run
+### Native run
 ```
 python3 -m venv .venv
 source .venv/bin/activate
@@ -82,12 +82,6 @@ docker compose up --build sentry_dataset
 docker compose up --build sentry_trainer
 docker compose up --build sentry_inferencer
 ```
-
-### Slurm
-```
-sbatch --nodes=1 --gpus-per-node=1 -A standby --constraint=B --mem=16384 slurm.sh
-```
-Modify the slurm.sh as you see fit.
 
 ### Native run
 ```

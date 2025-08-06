@@ -16,3 +16,4 @@ cupy-cuda12x
 datasets
 nvidia-dali-cuda120
 importlib_metadata
+torchvision
