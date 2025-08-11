@@ -9,12 +9,12 @@ if __name__ == '__main__':
         login(token=f.read().rstrip())
         model = get_model('vgg19', pretrained=True, device='gpu')
 
-        dataloader, hasher = get_text_dataloader(
+        dataloader, hasher = get_image_dataloader(
             data_path=os.path.join('dataset', 'cifar10', 'data'),
             meta_path=os.path.join('dataset', 'cifar10', 'metadata'),
             batch=128,
             device='gpu',
-            gds=False,
+            gds=True,
         )
 
         for data in dataloader:

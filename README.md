@@ -85,7 +85,7 @@ docker compose up --build sentry_inferencer
 
 ### Native run
 ```
-python agent_dataset.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
+python agent_dataset.py uoft-cs/cifar10 16 1 dataset/cifar10
 python agent_trainer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
 python agent_inferencer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
 ```
