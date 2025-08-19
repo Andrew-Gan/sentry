@@ -90,14 +90,48 @@ python agent_trainer.py --sig_out /home/signatures --model_path /home/torch priv
 python agent_inferencer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
 ```
 
-## Projects
+## Example
+Before Sentry:
+```python
+import torchvision.models as models
+from torch.utils.data import DataLoader
 
-Currently, there are two main projects in the repository: model signing (to
-prevent tampering of models after publication to ML model hubs) and
-[SLSA](https://slsa.dev/) (to prevent tampering of models during the build
-process).
+model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
+dataloader = DataLoader(testing_data, batch_size=128, shuffle=True)
 
-### Model Signing
+for data in dataloader:
+    x, y = data[0]['data'], data[0]['label']
+    pred = model(x)
+```
+
+After Sentry:
+```python
+import torchvision.models as models
+from common import get_image_dataloader
+from sentry.model_signing.hashing.topology import HashAlgo, Topology
+import sentry.signer
+
+model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
+
+# get Sentry's custom DALI-based dataloader which supports GPUDirect and dataset hashing
+dataloader, hasher = get_image_dataloader(
+    data_path='./dataset/cifar10/data',
+    meta_path='./dataset/cifar10/metadata',
+    batch=128,
+    device='gpu',
+    gds=True,
+)
+
+for data in dataloader:
+    x, y = data[0]['data'], data[0]['label']
+    pred = model(x)
+
+# verify model and dataset
+sentry.verifier.verify_model(model)
+sentry.verifier.verify_dataset(hasher.compute())
+```
+
+## Evaluation
 
 This project demonstrates how to protect the integrity of a model by signing it
 with [Sigstore](https://www.sigstore.dev/), a tool for making code signatures
