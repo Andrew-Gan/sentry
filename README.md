@@ -21,26 +21,9 @@ An end-to-end GPU framework for authenticating machine learning artifacts.
 
 ## Overview
 
-There is currently significant growth in the number of ML-powered applications.
-This brings benefits, but it also provides grounds for attackers to exploit
-unsuspecting ML users. This is why Google launched the [Secure AI Framework
-(SAIF)][saif] to establish industry standards for creating trustworthy and
-responsible AI applications. The first principle of SAIF is to
-
-> Expand strong security foundations to the AI ecosystem
-
-Building on the work with [Open Source Security Foundation][openssf], we are
-creating this repository to demonstrate how the ML supply chain can be
-strengthened in _the same way_ as the traditional software supply chain.
-
-This repository hosts a collection of utilities and examples related to the
-security of machine learning pipelines. The focus is on providing *verifiable*
-claims about the integrity and provenance of the resulting models, meaning users
-can check for themselves that these claims are true rather than having to just
-trust the model trainer.
+This work is described in an accepted paper to be published soon. Stay tuned for more.
 
 ## Setup
-We support three ways of running Sentry: Docker and native run.
 
 ### Docker
 [Docker](https://docs.docker.com/get-started/get-docker/)  
