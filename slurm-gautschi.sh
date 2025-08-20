@@ -9,6 +9,7 @@
 # conda install nvidia/label/cuda-12.6.0::cuda-toolkit
 
 # Run
+# conda activate sentry
 # sbatch --nodes=1 --ntasks=14 --gpus-per-node=1 --partition=ai --account=zghodsi --qos=normal slurm-gautschi.sh
 
 cd $SLURM_SUBMIT_DIR
