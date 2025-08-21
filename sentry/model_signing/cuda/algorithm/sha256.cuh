@@ -105,7 +105,7 @@ __device__ void init(SHA256_CTX *ctx)
 	ctx->state[7] = 0x5be0cd19;
 }
 
-__device__ void update(SHA256_CTX *ctx, const uint8_t data[], uint64_t len)
+__device__ void update(SHA256_CTX *ctx, uint8_t *data, uint64_t len)
 {
 	uint32_t i;
 

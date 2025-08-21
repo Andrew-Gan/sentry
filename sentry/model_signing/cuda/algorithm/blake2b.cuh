@@ -138,17 +138,17 @@ __device__ void init(BLAKE2B_CTX *ctx) {
     ctx->pos = BLAKE2B_BLOCK_LENGTH;
 }
 
-__device__ void update(BLAKE2B_CTX *ctx, uint8_t* in, int64_t inlen) {
-    if (inlen == 0)
+__device__ void update(BLAKE2B_CTX *ctx, uint8_t *data, uint64_t len) {
+    if (len == 0)
         return;
 
-    uint32_t start = 0;
-    int64_t in_index = 0, block_index = 0;
+    uint64_t start = 0;
+    uint64_t in_index = 0, block_index = 0;
 
     if (ctx->pos) {
         start = BLAKE2B_BLOCK_LENGTH - ctx->pos;
-        if (start < inlen){
-            memcpy(ctx->buff + ctx->pos, in, start);
+        if (start < len){
+            memcpy(ctx->buff + ctx->pos, data, start);
             ctx->t0 += BLAKE2B_BLOCK_LENGTH;
 
             if (ctx->t0 == 0) ctx->t1++;
@@ -157,26 +157,25 @@ __device__ void update(BLAKE2B_CTX *ctx, uint8_t* in, int64_t inlen) {
             ctx->pos = 0;
             memset(ctx->buff, 0, BLAKE2B_BLOCK_LENGTH);
         } else {
-            memcpy(ctx->buff + ctx->pos, in, inlen);//read the whole *in
-            ctx->pos += inlen;
+            memcpy(ctx->buff + ctx->pos, data, len);//read the whole *in
+            ctx->pos += len;
             return;
         }
     }
 
-    block_index =  inlen - BLAKE2B_BLOCK_LENGTH;
-    if (block_index <= 0)
+    if (len <= BLAKE2B_BLOCK_LENGTH)
         return;
 
+    block_index = len - BLAKE2B_BLOCK_LENGTH;
     for (in_index = start; in_index < block_index; in_index += BLAKE2B_BLOCK_LENGTH) {
         ctx->t0 += BLAKE2B_BLOCK_LENGTH;
         if (ctx->t0 == 0)
             ctx->t1++;
 
-        cuda_blake2b_compress(ctx, in, in_index);
+        cuda_blake2b_compress(ctx, data, in_index);
     }
-
-    memcpy(ctx->buff, in + in_index, inlen - in_index);
-    ctx->pos += inlen - in_index;
+    memcpy(ctx->buff, data + in_index, len - in_index);
+    ctx->pos += len - in_index;
 }
 
 __device__ void final(BLAKE2B_CTX *ctx, uint8_t* out) {

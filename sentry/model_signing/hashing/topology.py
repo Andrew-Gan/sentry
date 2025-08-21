@@ -490,7 +490,6 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             nThread = nBlock
             block = min(512, nThread)
             grid = (nThread + block - 1) // block
-
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashBlock, grid, 1, 1, block, 1, 1, 0, stream,
                 args.ctypes.data, 0,
@@ -566,19 +565,18 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
 
         currBytes = 0
         for stream, (src, samples) in zip(streams, data.items()):
+            # TODO: check why hash dataset mem error
             samplePtrs = np.array([s.data.ptr for s in samples], dtype=np.uint64)
+            print(blockSize, [s.nbytes for s in samples], flush=True)
             samplePtrsA = checkCudaErrors(runtime.cudaMallocAsync(samplePtrs.nbytes, stream))
             checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
                 samplePtrs.nbytes, runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, stream))
             samplePtrsA = (samplePtrsA, np.array([samplePtrsA], dtype=np.uint64))
-            sampleSizes = cp.array([sample.nbytes for sample in samples])
-            sampleSizesA = np.array([sampleSizes.data.ptr], dtype=np.uint64)
 
             nA = np.array([len(samples)], dtype=np.uint64)
             iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
             oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
-
-            args = [oData, samplePtrsA[1], sampleSizesA, nA]
+            args = [oData, samplePtrsA[1], blockSizeA, nA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashBlock, 1, 1, 1, len(samples), 1, 1, 0, stream,
@@ -603,10 +601,10 @@ class HomomorphicGPU(hashing.StreamingHashEngine):
             # add layer hash to layer sum
             args = [self.digests[src][1], oData, np.array([8], dtype=np.uint64)]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
+            # checkCudaErrors(driver.cuLaunchKernel(
+            #     self.adder, 1, 1, 1, 8, 1, 1, self.digestSize,
+            #     stream, args.ctypes.data, 0,
+            # ))
 
             currBytes += len(samples) * self.digestSize
 

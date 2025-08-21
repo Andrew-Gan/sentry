@@ -254,19 +254,19 @@ __device__ void init(SHA3_CTX *ctx)
     ctx->bits_in_queue = 0;
 }
 
-__device__ void update(SHA3_CTX *ctx, uint8_t *in, uint64_t inlen)
+__device__ void update(SHA3_CTX *ctx, uint8_t *data, uint64_t len)
 {
     long bytes = ctx->bits_in_queue >> 3;
     long count = 0;
-    while (count < inlen) {
-        if (bytes == 0 && count <= ((long)(inlen - ctx->rate_bytes))) {
+    while (count < len) {
+        if (bytes == 0 && count <= ((long)(len - ctx->rate_bytes))) {
             do {
-                cuda_sha3_absorb(ctx, in + count);
+                cuda_sha3_absorb(ctx, data + count);
                 count += ctx->rate_bytes;
-            } while (count <= ((long)(inlen - ctx->rate_bytes)));
+            } while (count <= ((long)(len - ctx->rate_bytes)));
         } else {
-            long partial = cuda_sha3_MIN(ctx->rate_bytes - bytes, inlen - count);
-            memcpy(ctx->q + bytes, in + count, partial);
+            long partial = cuda_sha3_MIN(ctx->rate_bytes - bytes, len - count);
+            memcpy(ctx->q + bytes, data + count, partial);
 
             bytes += partial;
             count += partial;
