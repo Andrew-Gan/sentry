@@ -11,7 +11,7 @@ import logging
 
 log = logging.getLogger(__name__)
 
-def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
+def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
     global sign
     args = sign._arguments()
     if isinstance(item, str):
@@ -49,7 +49,7 @@ def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topol
         sig.write(args.sig_out / pathlib.Path(f'dataset_{i}.sig'))
 
 
-def verify_model(item, hashAlgo, topology):
+def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
     global verify
     args = verify._arguments()
     args.sig_path = args.sig_path / pathlib.Path('model.sig')

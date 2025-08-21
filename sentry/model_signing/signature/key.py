@@ -118,7 +118,7 @@ class ECKeySigner(Signer):
         private_key = load_ec_private_key(key_path, password)
         return cls(private_key, device, num_sigs, hasher)
 
-    def _gpu_convert_bin_to_hex(self, hashes_d):
+    def _gpu_bin_to_hex(self, hashes_d):
         n = len(hashes_d)
         hash_bin_d = cp.ndarray([n, self._hasher.digestSize], dtype=cp.uint8)
         hash_hex_d = cp.ndarray([n, 2*self._hasher.digestSize], dtype=cp.uint8)
@@ -154,16 +154,21 @@ class ECKeySigner(Signer):
                 sigs.append(sig)
 
         elif self._device == 'gpu':
-            payloads_hashes_hex_d = [self._gpu_convert_bin_to_hex(h) for h in hashes]
+            hashes_hex_d = [self._gpu_bin_to_hex(h) for h in hashes]
             paes = {}
-            for i, (stmnt, hexHashes) in enumerate(zip(stmnts, payloads_hashes_hex_d)):
+            for i, (stmnt, hexHashes) in enumerate(zip(stmnts, hashes_hex_d)):
                 pae = encoding.pae(stmnt.pb)
                 dummy_pos = self._find_dummy_pos(pae)
                 assert(len(dummy_pos) == len(hexHashes))
                 pae_d = cp.frombuffer(pae, dtype=cp.uint8)
+                tmp = bytes(pae_d.nbytes)
+                driver.cuMemcpy(tmp, pae_d.data.ptr, pae_d.nbytes)
+                print(tmp.hex())
                 for j, pos in enumerate(dummy_pos):
                     checkCudaErrors(driver.cuMemcpy(pae_d.data.ptr + pos,
                         hexHashes[j].data.ptr, 2*self._hasher.digestSize))
+                driver.cuMemcpy(tmp, pae_d.data.ptr, pae_d.nbytes)
+                print(tmp.hex())
                 paes[i] = pae_d
             
             self._hasher.update(paes)

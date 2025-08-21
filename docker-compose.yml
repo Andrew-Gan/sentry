@@ -2,6 +2,7 @@ services:
   sentry_dataset: &sentry
     build: .
     image: sentry:latest
+    runtime: nvidia
     ulimits:
       nofile:
         soft: "4096"
@@ -13,16 +14,15 @@ services:
       - /share/sign-ml/torch:/home/torch
       - /share/sign-ml/dataset:/home/dataset
       - /run/udev:/run/udev:ro
+      - ./sentry:/home/sentry
     devices:
       - /dev/nvme0n1p4:/dev/nvme0n1p4
     deploy:
       resources:
-        limits:
-          memory: 8G
         reservations:
           devices:
             - driver: nvidia
-              device_ids: ['1']
+              device_ids: ['2']
               capabilities: [gpu]
     command: >
       python agent_dataset.py uoft-cs/cifar10 16 1 dataset/cifar10
