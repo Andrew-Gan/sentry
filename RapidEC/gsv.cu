@@ -681,7 +681,7 @@ bool isInit = false;
 int TPB, TPI, IPB;
 ec_t sm2;
 sign_ins_t *d_sign_ins = nullptr;
-verify_ins_t *d_verify_ins;
+verify_ins_t *d_verify_ins = nullptr;
 int *results;
 int32_t *d_results;
 cgbn_error_report_t *report;
@@ -772,10 +772,12 @@ void verify_init(int num_sigs) {
 }
 
 extern "C"
-int* verify_exec(int num_sigs, gsv_verify_t *sig) {
+int* verify_exec(int num_sigs, gsv_verify_t *sig, uint64_t *digests) {
     typedef gsv_params_t<GSV_TPI> params;
 
     CUDA_CHECK(cudaMemcpy(d_verify_ins, sig, sizeof(verify_ins_t) * num_sigs, cudaMemcpyHostToDevice));
+    for (int i = 0; i < num_sigs; i++)
+        CUDA_CHECK(cudaMemcpy(d_verify_ins, ((uint8_t**)digests)[i], 32, cudaMemcpyDeviceToDevice));
     kernel_sig_verify<params>
         <<<(num_sigs + IPB - 1) / IPB, TPB>>>(report, d_verify_ins, num_sigs, sm2, d_results);
 

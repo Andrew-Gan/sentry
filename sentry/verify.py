@@ -17,20 +17,16 @@
 import argparse
 import logging
 import pathlib
-import torch
 
 from .model_signing.hashing import hashing, file, state
 from .model_signing.serialization import serialize_by_file, serialize_by_state
-from .model_signing import model
 from .model_signing.signature import fake
 from .model_signing.signature import key
 from .model_signing.signature import pki
-from .model_signing.signature import verifying
 from .model_signing.signing import in_toto, in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
 from .model_signing.hashing.topology import *
-import collections
 
 log = logging.getLogger(__name__)
 
@@ -101,10 +97,9 @@ def _arguments() -> argparse.Namespace:
 def _get_verifier(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing.Verifier:
     if args.method == "private-key":
         _check_private_key_flags(args)
-        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
+        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_INPLACE) if device=='gpu' else None
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         return in_toto_signature.IntotoVerifier(verifier)
-
     elif args.method == "pki":
         _check_pki_flags(args)
         verifier = pki.PKIVerifier.from_paths(args.root_certs)
@@ -141,9 +136,9 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
         return in_toto_signature.IntotoSignature.read(args.sig_path)
 
 
-def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs=1):
+def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
     args = _arguments()
-    verifier = _get_verifier(args, dev, num_sigs)
+    verifier = _get_verifier(args, device, num_sigs)
     hasher = None
     
     if inputType == InputType.DIGEST:
@@ -159,7 +154,6 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs
 
     elif inputType == InputType.MODULE:
         hasher = get_hasher(hashAlgo, topology, inputType, device)
-
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
@@ -168,52 +162,3 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, num_sigs
     return hasher, verifier, serializer
 
 
-def verify_model(item, hashAlgo : HashAlgo, topology : Topology):
-    args = _arguments()
-    args.sig_path = args.sig_path / pathlib.Path('model.sig')
-    sig = _get_signature(args)
-    if isinstance(item, str):
-        _, verifier, serializer = build(hashAlgo, topology, InputType.FILE, 'cpu')
-        item = pathlib.Path(item)
-    elif isinstance(item, torch.nn.Module):
-        dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        _, verifier, serializer = build(hashAlgo, topology, InputType.MODULE, dev)
-        item = item.state_dict()
-    else:
-        raise TypeError('item is neither str nor torch module')
-
-    try:
-        model.verify(
-            sig=sig,
-            item=item,
-            verifier=verifier,
-            serializer=serializer,
-            ignore_paths=[args.sig_path],
-        )
-    except verifying.VerificationError as err:
-        log.error(f"verification failed: {err}")
-
-    log.info("all checks passed")
-
-
-def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
-    _, verifier, serializer = build(hashAlgo, topology, InputType.DIGEST)
-    args = _arguments()
-    sig_path = args.sig_path
-    sig = []
-    for i in range(len(item)):
-        args.sig_path = sig_path / pathlib.Path(f'dataset_{i}.sig')
-        sig.append(_get_signature(args))
-    try:
-        model.verify(
-            sig=sig,
-            item=item,
-            verifier=verifier,
-            serializer=serializer,
-            ignore_paths=[args.sig_path],
-            isDigest=True,
-        )
-    except verifying.VerificationError as err:
-        log.error(f"verification failed: {err}")
-
-    log.info("all checks passed")

@@ -144,44 +144,41 @@ class ECKeySigner(Signer):
         return [m.start() for m in re.finditer(dummy_value, data)]
 
     def sign(self, stmnts: list[statement.Statement], hashes=None) -> list[bundle_pb.Bundle]:
-        sign_tasks = []
         bundles = []
-        paes = []
+        sigs = []
     
         if self._device == 'cpu':
             for stmnt in stmnts:
                 pae = encoding.pae(stmnt.pb)
-                paes.append(pae)
+                sig = self._private_key.sign(pae, ec.ECDSA(SHA256()))
+                sigs.append(sig)
 
-        if self._device == 'gpu':
+        elif self._device == 'gpu':
             payloads_hashes_hex_d = [self._gpu_convert_bin_to_hex(h) for h in hashes]
-            for stmnt, hexHashes in zip(stmnts, payloads_hashes_hex_d):
+            paes = {}
+            for i, (stmnt, hexHashes) in enumerate(zip(stmnts, payloads_hashes_hex_d)):
                 pae = encoding.pae(stmnt.pb)
                 dummy_pos = self._find_dummy_pos(pae)
                 assert(len(dummy_pos) == len(hexHashes))
                 pae_d = cp.frombuffer(pae, dtype=cp.uint8)
-                for i, pos in enumerate(dummy_pos):
+                for j, pos in enumerate(dummy_pos):
                     checkCudaErrors(driver.cuMemcpy(pae_d.data.ptr + pos,
-                        hexHashes[i].data.ptr, 2*self._hasher.digestSize))
-                paes.append(pae_d)
-
-        if self._device == 'cpu':
-            sigs = [self._private_key.sign(pae, ec.ECDSA(SHA256())) for pae in paes]
-        elif self._device == 'gpu':
-            for _ in paes:
-                priv_key = self._private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
-                sign_tasks.append(gsv_sign_t(priv_key=gsv_mem_t.from_buffer_copy(priv_key)))
-            sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
-
-            self._hasher.update({i: pae for i, pae in enumerate(paes)})
+                        hexHashes[j].data.ptr, 2*self._hasher.digestSize))
+                paes[i] = pae_d
+            
+            self._hasher.update(paes)
             digestMap = self._hasher.compute()
-            digests = [v[1] for k, v in digestMap.items() if k != 'model']
+            digests = [v[1] for k, v in digestMap.items()]
             digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
+
+            priv_key = self._private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
+            sign_tasks = [gsv_sign_t(priv_key=gsv_mem_t.from_buffer_copy(priv_key)) for _ in range(self._num_sigs)]
+            sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
         
-            sigs_uncoded = self._gsv.sign_exec(self._num_sigs, sig_pending, digests)
-            sigs_uncoded = ctypes.cast(sigs_uncoded, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
+            sign_res = self._gsv.sign_exec(self._num_sigs, sig_pending, digests)
+            sign_res = ctypes.cast(sign_res, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
             rsPair = [(int.from_bytes(sig.r, byteorder='big'),
-                int.from_bytes(sig.s, byteorder='big')) for sig in sigs_uncoded.contents]
+                int.from_bytes(sig.s, byteorder='big')) for sig in sign_res.contents]
             sigs = [utils.encode_dss_signature(r, s) for r, s in rsPair]
 
         for stmnt, sig in zip(stmnts, sigs):
@@ -215,6 +212,8 @@ class ECKeyVerifier(Verifier):
                  num_sigs=1, hasher=None):
 
         self._public_key = public_key
+        self.pub_x = public_key.public_numbers().x.to_bytes(32)
+        self.pub_y = public_key.public_numbers().y.to_bytes(32)
         self._device = device
         self._num_sigs = num_sigs
 
@@ -243,40 +242,42 @@ class ECKeyVerifier(Verifier):
 
     def verify(self, bundles: list[bundle_pb.Bundle]) -> None:
         verify_tasks = []
-        # paes = []
-        # sigs = []
-        # for bundle in bundles:
-        #     statement = json_format.Parse(
-        #         bundle.dsse_envelope.payload,
-        #         statement_pb.Statement(),  # pylint: disable=no-member
-        #     )
-        #     paes.append(encoding.pae(statement))
-        #     sigs.append(bundle.dsse_envelope.signatures[0].sig)
+        paes = []
+        sigs = []
 
-        # if self._device == 'cpu':
-        #     try:
-        #         [self._public_key.verify(sig, pae, ec.ECDSA(SHA256()))
-        #          for pae, sig in zip(paes, sigs)]
-        #     except Exception as e:
-        #         raise VerificationError(
-        #             "signature verification failed " + str(e)
-        #         ) from e
-        # elif self._device == 'gpu':
-        #     for pae, sig in zip(paes, sigs):
-        #         pae_d = torch.frombuffer(bytearray(pae), dtype=torch.uint8).cuda()
-        #         self._hasher.update({'pae': pae_d}, len(pae))
-        #         digest = self._hasher.compute().digest_value
-        #         pub_x = self._public_key.public_numbers().x.to_bytes(32)
-        #         pub_y = self._public_key.public_numbers().y.to_bytes(32)
-        #         r, s = utils.decode_dss_signature(sig)
-        #         verify_tasks.append(gsv_verify_t(
-        #             r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
-        #             s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
-        #             e=gsv_mem_t.from_buffer_copy(digest),
-        #             key_x=gsv_mem_t.from_buffer_copy(pub_x),
-        #             key_y=gsv_mem_t.from_buffer_copy(pub_y),
-        #         ))
-        #     ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
-        #     results = self._gsv.verify_exec(self._num_sigs, ver_pending)
-        #     results = list(results)
-        #     print(results)
+        for bundle in bundles:
+            statement = json_format.Parse(
+                bundle.dsse_envelope.payload,
+                statement_pb.Statement(),  # pylint: disable=no-member
+            )
+            paes.append(encoding.pae(statement))
+            sigs.append(bundle.dsse_envelope.signatures[0].sig)
+
+        if self._device == 'cpu':
+            try:
+                [self._public_key.verify(sig, pae, ec.ECDSA(SHA256()))
+                 for pae, sig in zip(paes, sigs)]
+            except Exception as e:
+                raise VerificationError(
+                    "signature verification failed " + str(e)
+                ) from e
+        elif self._device == 'gpu':
+            paes_d = {}
+            for i, (pae, sig) in enumerate(zip(paes, sigs)):
+                paes_d[i] = cp.frombuffer(pae, dtype=cp.uint8)
+
+            self._hasher.update(paes_d)
+            digestMap = self._hasher.compute()
+            digests = [v[1] for k, v in digestMap.items()]
+            digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
+
+            r, s = utils.decode_dss_signature(sig)
+            verify_tasks.append(gsv_verify_t(
+                r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
+                s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
+                key_x=gsv_mem_t.from_buffer_copy(self.pub_x),
+                key_y=gsv_mem_t.from_buffer_copy(self.pub_y),
+            ))
+            ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
+            ver_res = self._gsv.verify_exec(self._num_sigs, ver_pending, digests)
+            ver_res = ctypes.cast(ver_res, ctypes.POINTER((gsv_verify_t * self._num_sigs)))

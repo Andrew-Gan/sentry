@@ -17,19 +17,15 @@
 import argparse
 import logging
 import pathlib
-import torch
 from .model_signing.hashing import hashing, file, state
 from .model_signing.serialization import serialize_by_file, serialize_by_state
-from .model_signing import model
 from .model_signing.signature import fake
 from .model_signing.signature import key
 from .model_signing.signature import pki
-from .model_signing.signing import in_toto
 from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
 from .model_signing.hashing.topology import *
-import collections
 
 log = logging.getLogger(__name__)
 
@@ -126,14 +122,13 @@ def _get_payload_signer(args: argparse.Namespace, device='gpu', num_sigs=1) -> s
     if args.method == "private-key":
         _check_private_key_options(args)
         signerHasher = None
-        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
+        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_INPLACE) if device=='gpu' else None
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,
             num_sigs=num_sigs,
             hasher=signerHasher)
         return in_toto_signature.IntotoSigner(payload_signer)
-
     elif args.method == "pki":
         _check_pki_options(args)
         payload_signer = pki.PKISigner.from_path(
@@ -201,38 +196,3 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='
             state_hasher_factory=hasher_factory)
 
     return hasher, payload_signer, serializer
-
-def sign_model(item, hashAlgo : HashAlgo, topology : Topology):
-    args = _arguments()
-    if isinstance(item, str):
-        _, signer, serializer = build(hashAlgo, topology, InputType.FILE, 'cpu')
-        item = pathlib.Path(item)
-    elif isinstance(item, torch.nn.Module):
-        dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        _, signer, serializer = build(hashAlgo, topology, InputType.MODULE, dev)
-        item = item.state_dict()
-    else:
-        raise TypeError('item is neither str nor torch module')
-
-    sig = model.sign(
-        item=item,
-        signer=signer,
-        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-        serializer=serializer,
-        ignore_paths=[args.sig_out],
-    )[0]
-    sig.write(args.sig_out / pathlib.Path('model.sig'))
-
-
-def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
-    _, signer, serializer = build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
-    args = _arguments()
-    sigs = model.sign(
-        item=item,
-        signer=signer,
-        payload_generator=in_toto.DigestsIntotoPayload.from_manifest,
-        serializer=serializer,
-        isDigest=True,
-    )
-    for i, sig in enumerate(sigs):
-        sig.write(args.sig_out / pathlib.Path(f'dataset_{i}.sig'))

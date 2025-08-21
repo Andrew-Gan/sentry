@@ -666,17 +666,26 @@ class DigestsIntotoPayload(IntotoPayload):
               format for this class. See `from_manifest`.
         """
         subjects = payload["subject"]
-
         items = []
+        isStateLevel = False
         for subject in subjects:
-            path = pathlib.PurePosixPath(subject["name"])
             algorithm = subject["annotations"]["actual_hash_algorithm"]
             digest_value = subject["digest"]["sha256"]
             digest = hashing.Digest(algorithm, bytes.fromhex(digest_value))
-            item = manifest_module.FileManifestItem(path=path, digest=digest)
+            if 'MERKLE' in algorithm: #TODO: find a better way to detect statelevelmanifests
+                layer = subject["name"]
+                item = manifest_module.StateManifestItem(state=layer, digest=digest)
+            else:
+                path = pathlib.PurePosixPath(subject["name"])
+                item = manifest_module.FileManifestItem(path=path, digest=digest)
             items.append(item)
 
-        return manifest_module.FileLevelManifest(items)
+        if isinstance(items[0], manifest_module.FileManifestItem):
+            return manifest_module.FileLevelManifest(items)
+        elif isinstance(items[0], manifest_module.StateManifestItem):
+            return manifest_module.StateLevelManifest(items)
+        
+        raise RuntimeError("DigestsIntotoPayload: invalid manifest item type")
 
 
 class ShardDigestsIntotoPayload(IntotoPayload):

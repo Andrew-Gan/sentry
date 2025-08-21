@@ -101,7 +101,9 @@ def verify(
                 state=src, digest=digest)
             local_manifests.append(serializer._build_manifest([manifestItem]))
     else:
-        local_manifests.append(serializer.serialize(item, ignore_paths=ignore_paths))
+        manif = serializer.serialize(item, ignore_paths=ignore_paths)
+        trueHashes = [serializer.hashes_d if hasattr(serializer, 'hashes_d') else None]
+        local_manifests.append(manif)
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:
