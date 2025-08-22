@@ -91,27 +91,23 @@ After Sentry:
 ```python
 import torchvision.models as models
 from common import get_image_dataloader
-from sentry.model_signing.hashing.topology import HashAlgo, Topology
-import sentry.signer
+import sentry
 
 model = models.vgg19(weights=models.VGG19_Weights.DEFAULT)
-
 # get Sentry's custom DALI-based dataloader which supports GPUDirect and dataset hashing
 dataloader, hasher = get_image_dataloader(
-    data_path='./dataset/cifar10/data',
-    meta_path='./dataset/cifar10/metadata',
-    batch=128,
-    device='gpu',
-    gds=True,
+    path='./dataset/cifar10', batch=128, device='gpu', gds=True,
 )
+
+# verify model
+sentry.verify_model(model)
 
 for data in dataloader:
     x, y = data[0]['data'], data[0]['label']
     pred = model(x)
 
-# verify model and dataset
-sentry.verifier.verify_model(model)
-sentry.verifier.verify_dataset(hasher.compute())
+# verify dataset
+sentry.verify_dataset(hasher.compute())
 ```
 
 ## Evaluation

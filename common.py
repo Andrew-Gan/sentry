@@ -6,6 +6,7 @@ from sentry.model_signing.hashing.topology import *
 from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 import torchvision
+import pathlib
 
 def hash_batch(data: list, metadata: list):
     partitions = {}
@@ -34,7 +35,9 @@ def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
 
     return model.to('cuda' if device=='gpu' else device)
 
-def get_image_dataloader(data_path: str, meta_path: str, batch: int, device: str, gds: bool):
+def get_image_dataloader(path: str, batch: int, device: str, gds: bool):
+    data_path = pathlib.Path(path) / 'data'
+    meta_path = pathlib.Path(path) / 'metadata'
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
