@@ -21,7 +21,8 @@ An end-to-end GPU framework for authenticating machine learning artifacts.
 
 ## Overview
 
-This work is described in an accepted paper to be published soon. Stay tuned for more.
+This work is described in an accepted paper to be published soon. Stay tuned for more.  
+Before setting up, please refer to [link](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html) to ensure compatibility between driver, compiler and runtime APIs.
 
 ## Setup
 
