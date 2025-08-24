@@ -213,8 +213,8 @@ class MerkleGPU(hashing.StreamingHashEngine):
         self.topology = topology
         global srcPath
         myPath = os.path.join(srcPath, 'merkle.cuh')
-        self.ctx, [self.hashBlock, self.reduce] = \
-            compileCuda(myPath, ['hash_block', 'reduce'], [hashAlgo.name, topology.name])
+        self.ctx, [self.hashBlock, self.reduce] = compileCuda(
+            myPath, ['hash_block', 'reduce'], [hashAlgo.name, topology.name])
     
     def _reduce_tree(self, nDigest, inputBuffer, outputBuffer, stream):
         inputBuffer = (inputBuffer, np.array([inputBuffer], dtype=np.uint64))
@@ -429,11 +429,11 @@ class LatticeGPU(hashing.StreamingHashEngine):
         global srcPath
         myPath = os.path.join(srcPath, hashAlgo.value[0])
         if inputType == InputType.MODULE:
-            self.ctx, [self.hashBlock, self.reduce] = compileCuda(myPath,
-                ['hash_ltHash', 'reduce_ltHash'])
+            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
+                myPath, ['hash_ltHash', 'reduce_ltHash'])
         elif inputType == InputType.DIGEST:
-            self.ctx, [self.hashBlock, self.reduce] = compileCuda(myPath,
-                ['hash_dataset_ltHash', 'reduce_ltHash'])
+            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
+                myPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
     
     def __exit__(self):
         checkCudaErrors(runtime.cudaFree(self.iDataFull))
@@ -559,15 +559,6 @@ class LatticeGPU(hashing.StreamingHashEngine):
             checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
                 samplePtrs.nbytes, runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, stream))
 
-            # debug
-            print('input')
-            for sample in samples:
-                tmp = bytes(8)
-                checkCudaErrors(driver.cuMemcpyDtoH(tmp, sample.data.ptr, 8))
-                print(tmp.hex(), end=' ')
-            print('')
-            #end debug
-
             nA = np.array([len(samples)], dtype=np.uint64)
             iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
             oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
@@ -579,44 +570,29 @@ class LatticeGPU(hashing.StreamingHashEngine):
             ))
             checkCudaErrors(runtime.cudaFreeAsync(samplePtrsA, stream))
 
-            # debug
-            checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-            print('hashed', flush=True)
-            for i, sample in enumerate(samples):
-                tmp = bytes(8)
-                checkCudaErrors(driver.cuMemcpyDtoH(tmp, self.oDataFull + (64*i), 8))
-                print(tmp.hex(), end=' ')
-            print('')
-            #end debug
-
-            # nDigests = len(samples)
-            # while nDigests > 1:
-            #     iData, oData = oData, iData
-            #     nThread = ((nDigests + 1) >> 1) * 8
-            #     block = min(512, nThread)
-            #     grid = (nThread + (block-1)) // block
-            #     args = [oData, iData, np.array([nThread], dtype=np.uint64)]
-            #     args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            #     checkCudaErrors(driver.cuLaunchKernel(
-            #         self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
-            #         stream, args.ctypes.data, 0,
-            #     ))
-            #     nDigests = grid
+            nDigests = len(samples)
+            while nDigests > 1:
+                iData, oData = oData, iData
+                nThread = ((nDigests + 1) >> 1) * 8
+                block = min(512, nThread)
+                grid = (nThread + (block-1)) // block
+                args = [oData, iData, np.array([nThread], dtype=np.uint64)]
+                args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+                checkCudaErrors(driver.cuLaunchKernel(
+                    self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
+                    stream, args.ctypes.data, 0,
+                ))
+                nDigests = grid
             
-            # # add layer hash to layer sum
-            # # debug
-            # tmp = bytes(64)
-            # checkCudaErrors(driver.cuMemcpyDtoH(tmp, self.oDataFull+currBytes, 64))
-            # print('output\n', tmp.hex())
-            # #end debug
-            # args = [np.array([self.digests[src]], dtype=np.uint64), oData, np.array([8], dtype=np.uint64)]
-            # args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            # checkCudaErrors(driver.cuLaunchKernel(
-            #     self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,
-            #     stream, args.ctypes.data, 0,
-            # ))
+            # add layer hash to layer sum
+            args = [np.array([self.digests[src]], dtype=np.uint64), oData, np.array([8], dtype=np.uint64)]
+            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+            checkCudaErrors(driver.cuLaunchKernel(
+                self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,
+                stream, args.ctypes.data, 0,
+            ))
 
-            # currBytes += len(samples) * self.digestSize
+            currBytes += len(samples) * self.digestSize
 
         for stream in streams:
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
@@ -630,14 +606,14 @@ class LatticeGPU(hashing.StreamingHashEngine):
     def compute(self) -> collections.OrderedDict:
         digests = {}
         for key, trueHash in self.digests.items():
-            digest = hashing.Digest(self.digest_name, bytes(range(32)))
+            digest = hashing.Digest(self.digest_name, bytes(range(self.digest_size)))
             digests[key] = (digest, trueHash)
         return digests
 
     @property
     @override
     def digest_name(self) -> str:
-        return f'{Topology.LATTICE}-{self.hashAlgo.name}'
+        return f'{Topology.LATTICE.name}-{self.hashAlgo.name}'
 
     @property
     @override

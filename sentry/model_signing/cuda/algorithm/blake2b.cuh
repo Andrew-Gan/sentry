@@ -142,8 +142,8 @@ __device__ void update(BLAKE2B_CTX *ctx, uint8_t *data, uint64_t len) {
     if (len == 0)
         return;
 
-    uint64_t start = 0;
-    uint64_t in_index = 0, block_index = 0;
+    int16_t start = 0;
+    int64_t in_index = 0, block_index = 0;
 
     if (ctx->pos) {
         start = BLAKE2B_BLOCK_LENGTH - ctx->pos;
@@ -162,9 +162,6 @@ __device__ void update(BLAKE2B_CTX *ctx, uint8_t *data, uint64_t len) {
             return;
         }
     }
-
-    if (len <= BLAKE2B_BLOCK_LENGTH)
-        return;
 
     block_index = len - BLAKE2B_BLOCK_LENGTH;
     for (in_index = start; in_index < block_index; in_index += BLAKE2B_BLOCK_LENGTH) {

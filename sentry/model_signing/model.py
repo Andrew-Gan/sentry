@@ -99,15 +99,16 @@ def verify(
 
     if isDigest:
         for src, (digest, trueHash) in item.items():
-            manifest = manifest.StateManifestItem(
+            checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))
+            manifestItem = manifest.StateManifestItem(
                 state=src, digest=digest)
-            local_manifests.append(serializer._build_manifest([manifest]))
+            local_manifests.append(serializer._build_manifest([manifestItem]))
     else:
-        manifest = serializer.serialize(item, ignore_paths=ignore_paths)
+        manifestItem = serializer.serialize(item, ignore_paths=ignore_paths)
         if hasattr(serializer, 'trueHashes'):
-            for digest, trueHash in zip(manifest._item_to_digest.values(), serializer.trueHashes):
-                checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, 32))
-        local_manifests.append(manifest)
+            for digest, trueHash in zip(manifestItem._item_to_digest.values(), serializer.trueHashes):
+                checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))
+        local_manifests.append(manifestItem)
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:

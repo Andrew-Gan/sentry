@@ -86,7 +86,7 @@ def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, to
     sig = []
     for i in range(len(item)):
         args.sig_path = sig_path / pathlib.Path(f'dataset_{i}.sig')
-        sig.append(_get_signature(args))
+        sig.append(verify._get_signature(args))
     try:
         model.verify(
             sig=sig,

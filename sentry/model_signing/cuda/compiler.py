@@ -54,7 +54,7 @@ def compileCuda(srcPath: str, function_names: list[str], flags=[]):
         bytes(srcPath, 'utf-8'), 0, [], []))
     
     # compile code into program and extract ptx
-    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
+    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts) # file bug for changing digest map values
     if err[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
         logSize = checkCudaErrors(nvrtc.nvrtcGetProgramLogSize(prog))
         log = bytes(logSize)

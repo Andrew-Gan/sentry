@@ -119,13 +119,13 @@ class ECKeySigner(Signer):
         private_key = load_ec_private_key(key_path, password)
         return cls(private_key, device, num_sigs, hasher)
 
-    def _gpu_bin_to_hex(self, hashes_d):
-        n = len(hashes_d)
-        hash_bin_d = cp.ndarray([n, self._hasher.digestSize], dtype=cp.uint8)
-        hash_hex_d = cp.ndarray([n, 2*self._hasher.digestSize], dtype=cp.uint8)
+    def _gpu_bin_to_hex(self, hashes, nBytes):
+        n = len(hashes)
+        hash_bin_d = cp.ndarray([n, nBytes], dtype=cp.uint8)
+        hash_hex_d = cp.ndarray([n, 2*nBytes], dtype=cp.uint8)
 
-        for i, hash_d in enumerate(hashes_d):
-            driver.cuMemcpy(hash_bin_d[i].data.ptr, hash_d, self._hasher.digestSize)
+        for i, hash_d in enumerate(hashes):
+            driver.cuMemcpy(hash_bin_d[i].data.ptr, hash_d, nBytes)
 
         hex_in = np.array([hash_bin_d.data.ptr], dtype=np.uint64)
         hex_out = np.array([hash_hex_d.data.ptr], dtype=np.uint64)
@@ -133,18 +133,18 @@ class ECKeySigner(Signer):
         args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
         stream = checkCudaErrors(driver.cuStreamCreate(0))
         checkCudaErrors(driver.cuLaunchKernel(
-            ECKeySigner._binToHex, n, 1, 1, self._hasher.digestSize, 1, 1, 0,
+            ECKeySigner._binToHex, n, 1, 1, nBytes, 1, 1, 0,
             stream, args.ctypes.data, 0
         ))
         checkCudaErrors(driver.cuStreamSynchronize(stream))
         checkCudaErrors(driver.cuStreamDestroy(stream))
         return hash_hex_d
 
-    def _find_dummy_pos(self, data: bytearray):
-        dummy_value = bytes(range(self._hasher.digestSize)).hex().encode()
+    def _find_dummy_pos(self, data: bytearray, length):
+        dummy_value = bytes(range(length)).hex().encode()
         return [m.start() for m in re.finditer(dummy_value, data)]
 
-    def sign(self, stmnts: list[statement.Statement], hashes=None) -> list[bundle_pb.Bundle]:
+    def sign(self, stmnts: list[statement.Statement], stmnts_hashes=None) -> list[bundle_pb.Bundle]:
         bundles = []
         sigs = []
 
@@ -155,16 +155,19 @@ class ECKeySigner(Signer):
                 sigs.append(sig)
 
         elif self._device == 'gpu':
-            identities_hashes_hex_d = [self._gpu_bin_to_hex(h) for h in hashes]
+            identities_hashes_hex_d = []
             paes = {}
-            for i, (stmnt, identity_hashes_hex_d) in enumerate(zip(stmnts, identities_hashes_hex_d)):
+            for i, (stmnt, stmnt_hashes) in enumerate(zip(stmnts, stmnts_hashes)):
+                digestSize = len(stmnt.pb.subject[0].digest['hash']) // 2
+                identity_hashes_hex_d = self._gpu_bin_to_hex(stmnt_hashes, digestSize)
+                identities_hashes_hex_d.append(identity_hashes_hex_d)
                 pae = encoding.pae(stmnt.pb)
-                dummy_pos = self._find_dummy_pos(pae)
-                assert(len(dummy_pos) == len(identity_hashes_hex_d))
+                dummy_pos = self._find_dummy_pos(pae, digestSize)
+                assert(len(dummy_pos) == len(stmnt_hashes))
                 pae_d = cp.frombuffer(pae, dtype=cp.uint8)
                 for j, pos in enumerate(dummy_pos):
                     checkCudaErrors(driver.cuMemcpy(pae_d.data.ptr + pos,
-                        identity_hashes_hex_d[j].data.ptr, 2*self._hasher.digestSize))
+                        identity_hashes_hex_d[j].data.ptr, 2*digestSize))
                 paes[i] = pae_d
             
             self._hasher.update(paes)
@@ -189,8 +192,9 @@ class ECKeySigner(Signer):
                 for i, hash_hex_d in enumerate(identity_hashes_hex_d):
                     hash_hex_h = bytes(hash_hex_d.nbytes)
                     checkCudaErrors(driver.cuMemcpyDtoH(hash_hex_h, hash_hex_d.data.ptr, hash_hex_d.nbytes))
-                    stmnt.pb.subject[i].digest.update({'sha256': hash_hex_h.decode()})
-            payload = json_format.MessageToJson(stmnt.pb).encode()
+                    stmnt.pb.subject[i].digest.update({'hash': hash_hex_h.decode()})
+            x = json_format.MessageToJson(stmnt.pb)
+            payload = x.encode()
             env = intoto_pb.Envelope(
                 payload=payload,
                 payload_type=encoding.PAYLOAD_TYPE,

@@ -532,7 +532,7 @@ def _convert_descriptors_to_direct_statement(
     for descriptor in manifest.resource_descriptors():
         subject = statement.ResourceDescriptor(
             name=descriptor.identifier,
-            digest={"sha256": descriptor.digest.digest_hex},
+            digest={"hash": descriptor.digest.digest_hex},
             annotations={"actual_hash_algorithm": descriptor.digest.algorithm},
         )
         subjects.append(subject.pb)
@@ -652,7 +652,7 @@ class DigestsIntotoPayload(IntotoPayload):
     @override
     def manifest_from_payload(
         cls, payload: dict[str, Any]
-    ) -> manifest_module.FileLevelManifest:
+    ) -> manifest_module.FileLevelManifest | manifest_module.StateLevelManifest:
         """Builds a manifest from an in-memory in-toto payload.
 
         Args:
@@ -670,9 +670,9 @@ class DigestsIntotoPayload(IntotoPayload):
         isStateLevel = False
         for subject in subjects:
             algorithm = subject["annotations"]["actual_hash_algorithm"]
-            digest_value = subject["digest"]["sha256"]
+            digest_value = subject["digest"]["hash"]
             digest = hashing.Digest(algorithm, bytes.fromhex(digest_value))
-            if 'MERKLE' in algorithm: #TODO: find a better way to detect statelevelmanifests
+            if any(word in algorithm for word in ['MERKLE', 'LATTICE']): #TODO: find a better way to detect statelevelmanifests
                 layer = subject["name"]
                 item = manifest_module.StateManifestItem(state=layer, digest=digest)
             else:
@@ -813,7 +813,7 @@ class ShardDigestsIntotoPayload(IntotoPayload):
         for subject in subjects:
             shard = manifest_module.Shard.from_str(subject["name"])
             algorithm = subject["annotations"]["actual_hash_algorithm"]
-            digest_value = subject["digest"]["sha256"]
+            digest_value = subject["digest"]["hash"]
             digest = hashing.Digest(algorithm, bytes.fromhex(digest_value))
             item = manifest_module.ShardedFileManifestItem(
                 path=shard.path, start=shard.start, end=shard.end, digest=digest

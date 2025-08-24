@@ -11,7 +11,7 @@ import pathlib
 def hash_batch(data: list, metadata: list):
     partitions = {}
     for sample, (src, _) in zip(data, metadata):
-        src = src.item()
+        src = str(src.item())
         if src not in partitions:
             partitions[src] = []
         partitions[src].append(sample)

@@ -56,8 +56,6 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
     uint64_t s = (BLAKE2B_STATE_SIZE - BLAKE2XB_STATE_SIZE) * sizeof(*ctx->blake2b_ctx.state);
     memset(ctx->blake2b_ctx.state + BLAKE2XB_STATE_SIZE, 0, s);
     if (key) {
-        // assert (key_nBytes < BLAKE2B_KEYBYTES_MIN ||
-        //     key_nBytes > BLAKE2B_KEYBYTES_MAX);
         uint8_t block[128];
         memcpy(block, key, key_nBytes);
         memset(block + key_nBytes, 0, 128 - key_nBytes);
@@ -68,13 +66,11 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
 
 __device__
 void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint64_t outputLength,
-    uint8_t *key = nullptr, uint64_t key_nBytes = 0,
     uint8_t *salt = nullptr, uint8_t *personalization = nullptr) {
-
+    
+    const uint64_t key = 0xFEDCBA9876543210UL;
+    const uint64_t keylen = sizeof(key);
     memset(ctx, 0, sizeof(ctx));
-    memcpy(ctx->blake2b_ctx.key, key, key_nBytes);
-    ctx->blake2b_ctx.digestlen = BLAKE2B_BYTES_MAX;
-    ctx->blake2b_ctx.keylen = (uint8_t)key_nBytes;
     ctx->fanout = 1;
     ctx->depth = 1;
     ctx->xofLength = (uint32_t)outputLength;
@@ -82,7 +78,8 @@ void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint64_t outputLength,
         memcpy(ctx->salt, salt, sizeof(ctx->salt));
     if (personalization)
         memcpy(ctx->personal, personalization, sizeof(ctx->personal));
-    initStateFromParams(ctx, key, key_nBytes);
+    init(&ctx->blake2b_ctx);
+    initStateFromParams(ctx, (uint8_t*)&key, keylen);
 }
 
 __device__
@@ -92,7 +89,6 @@ void cuda_blake2xb_update(BLAKE2XB_CTX *ctx, uint8_t *data, uint64_t data_nBytes
 
 __device__
 void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
-    // TODO: proof check
     uint8_t h0[BLAKE2B_BYTES_MAX];
     final(&ctx->blake2b_ctx, h0);
 
