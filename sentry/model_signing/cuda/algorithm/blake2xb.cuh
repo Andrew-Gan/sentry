@@ -92,6 +92,7 @@ void cuda_blake2xb_update(BLAKE2XB_CTX *ctx, uint8_t *data, uint64_t data_nBytes
 
 __device__
 void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
+    // TODO: proof check
     uint8_t h0[BLAKE2B_BYTES_MAX];
     final(&ctx->blake2b_ctx, h0);
 
@@ -101,7 +102,7 @@ void cuda_blake2xb_final(BLAKE2XB_CTX *ctx, uint8_t *out) {
     ctx->leafLength = (uint32_t)BLAKE2B_BYTES_MAX;
     ctx->innerLength = BLAKE2B_BYTES_MAX;
     uint64_t pos = 0;
-    uint64_t remaining = ctx->xofLength;
+    uint64_t remaining = 64;
     while (remaining > 0) {
         ctx->nodeOffset = (uint32_t)pos / BLAKE2B_BYTES_MAX;
         uint64_t len = BLAKE2B_BYTES_MAX < remaining ? BLAKE2B_BYTES_MAX : remaining;

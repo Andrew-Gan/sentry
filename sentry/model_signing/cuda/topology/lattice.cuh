@@ -82,14 +82,14 @@ extern "C" __global__
 void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_t n) {
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
-    uint8_t *myIn = in[i];
-
     BLAKE2XB_CTX ctx;
     uint64_t key = 0xfedcba9876543210UL;
     cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX, (uint8_t*)&key, sizeof(key));
     cuda_blake2xb_update(&ctx, (uint8_t*)&i, sizeof(i));
-    cuda_blake2xb_update(&ctx, myIn, blockSize);
+    cuda_blake2xb_update(&ctx, in[i], blockSize);
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
+    uint8_t *tmp = out + i * BLAKE2B_BYTES_MAX;
+    printf("%d: %x %x %x %x\n", i, ctx[0], tmp[1], tmp[2], tmp[3]);
 }
 
 extern "C" __global__

@@ -340,7 +340,7 @@ class StateLevelManifest(ItemizedManifest):
     def resource_descriptors(self) -> Iterator[ResourceDescriptor]:
         """Yields each resource from the manifest, one by one.
 
-        The items are returned in alphabetical order of the path.
+        The items are returned in the order of the model state dictionary.
         """
-        for item, digest in sorted(self._item_to_digest.items()):
+        for item, digest in self._item_to_digest.items():
             yield ResourceDescriptor(identifier=str(item), digest=digest)

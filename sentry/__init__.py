@@ -34,9 +34,9 @@ def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE)
     sig.write(args.sig_out / pathlib.Path('model.sig'))
 
 
-def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
+def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
     global sign
-    _, signer, serializer = build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
+    _, signer, serializer = sign.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
     args = sign._arguments()
     sigs = model.sign(
         item=item,
@@ -78,9 +78,9 @@ def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLAC
     log.info("all checks passed")
 
 
-def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.LATTICE, topology=Topology.HADD):
+def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
     global verify
-    _, verifier, serializer = build(hashAlgo, topology, InputType.DIGEST)
+    _, verifier, serializer = verify.build(hashAlgo, topology, InputType.DIGEST)
     args = verify._arguments()
     sig_path = args.sig_path
     sig = []

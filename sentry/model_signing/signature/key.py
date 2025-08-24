@@ -86,6 +86,7 @@ class ECKeySigner(Signer):
                  num_sigs=1, hasher=None):
 
         self._private_key = private_key
+        self._priv_val = self._private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
         self._device = device
         self._num_sigs = num_sigs
 
@@ -140,13 +141,13 @@ class ECKeySigner(Signer):
         return hash_hex_d
 
     def _find_dummy_pos(self, data: bytearray):
-        dummy_value = bytes(bytes(range(self._hasher.digestSize)).hex(), 'utf-8')
+        dummy_value = bytes(range(self._hasher.digestSize)).hex().encode()
         return [m.start() for m in re.finditer(dummy_value, data)]
 
     def sign(self, stmnts: list[statement.Statement], hashes=None) -> list[bundle_pb.Bundle]:
         bundles = []
         sigs = []
-    
+
         if self._device == 'cpu':
             for stmnt in stmnts:
                 pae = encoding.pae(stmnt.pb)
@@ -154,21 +155,16 @@ class ECKeySigner(Signer):
                 sigs.append(sig)
 
         elif self._device == 'gpu':
-            hashes_hex_d = [self._gpu_bin_to_hex(h) for h in hashes]
+            identities_hashes_hex_d = [self._gpu_bin_to_hex(h) for h in hashes]
             paes = {}
-            for i, (stmnt, hexHashes) in enumerate(zip(stmnts, hashes_hex_d)):
+            for i, (stmnt, identity_hashes_hex_d) in enumerate(zip(stmnts, identities_hashes_hex_d)):
                 pae = encoding.pae(stmnt.pb)
                 dummy_pos = self._find_dummy_pos(pae)
-                assert(len(dummy_pos) == len(hexHashes))
+                assert(len(dummy_pos) == len(identity_hashes_hex_d))
                 pae_d = cp.frombuffer(pae, dtype=cp.uint8)
-                tmp = bytes(pae_d.nbytes)
-                driver.cuMemcpy(tmp, pae_d.data.ptr, pae_d.nbytes)
-                print(tmp.hex())
                 for j, pos in enumerate(dummy_pos):
                     checkCudaErrors(driver.cuMemcpy(pae_d.data.ptr + pos,
-                        hexHashes[j].data.ptr, 2*self._hasher.digestSize))
-                driver.cuMemcpy(tmp, pae_d.data.ptr, pae_d.nbytes)
-                print(tmp.hex())
+                        identity_hashes_hex_d[j].data.ptr, 2*self._hasher.digestSize))
                 paes[i] = pae_d
             
             self._hasher.update(paes)
@@ -176,18 +172,25 @@ class ECKeySigner(Signer):
             digests = [v[1] for k, v in digestMap.items()]
             digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
 
-            priv_key = self._private_key.private_numbers().private_value.to_bytes(32, byteorder='big')
-            sign_tasks = [gsv_sign_t(priv_key=gsv_mem_t.from_buffer_copy(priv_key)) for _ in range(self._num_sigs)]
+            sign_tasks = [gsv_sign_t(
+                priv_key=gsv_mem_t.from_buffer_copy(self._priv_val)
+            ) for _ in range(self._num_sigs)]
             sig_pending = (gsv_sign_t * self._num_sigs)(*sign_tasks)
-        
             sign_res = self._gsv.sign_exec(self._num_sigs, sig_pending, digests)
             sign_res = ctypes.cast(sign_res, ctypes.POINTER((gsv_sign_t * self._num_sigs)))
-            rsPair = [(int.from_bytes(sig.r, byteorder='big'),
-                int.from_bytes(sig.s, byteorder='big')) for sig in sign_res.contents]
+            rsPair = [(
+                int.from_bytes(sig.r, byteorder='big'),
+                int.from_bytes(sig.s, byteorder='big')
+            ) for sig in sign_res.contents]
             sigs = [utils.encode_dss_signature(r, s) for r, s in rsPair]
 
-        for stmnt, sig in zip(stmnts, sigs):
-            payload=json_format.MessageToJson(stmnt.pb).encode()
+        for stmnt, sig, identity_hashes_hex_d in zip(stmnts, sigs, identities_hashes_hex_d):
+            if self._device == 'gpu':
+                for i, hash_hex_d in enumerate(identity_hashes_hex_d):
+                    hash_hex_h = bytes(hash_hex_d.nbytes)
+                    checkCudaErrors(driver.cuMemcpyDtoH(hash_hex_h, hash_hex_d.data.ptr, hash_hex_d.nbytes))
+                    stmnt.pb.subject[i].digest.update({'sha256': hash_hex_h.decode()})
+            payload = json_format.MessageToJson(stmnt.pb).encode()
             env = intoto_pb.Envelope(
                 payload=payload,
                 payload_type=encoding.PAYLOAD_TYPE,
@@ -217,8 +220,8 @@ class ECKeyVerifier(Verifier):
                  num_sigs=1, hasher=None):
 
         self._public_key = public_key
-        self.pub_x = public_key.public_numbers().x.to_bytes(32)
-        self.pub_y = public_key.public_numbers().y.to_bytes(32)
+        self._pub_x = public_key.public_numbers().x.to_bytes(32, byteorder='big')
+        self._pub_y = public_key.public_numbers().y.to_bytes(32, byteorder='big')
         self._device = device
         self._num_sigs = num_sigs
 
@@ -246,7 +249,6 @@ class ECKeyVerifier(Verifier):
         return cls(public_key, device, num_sigs, hasher)
 
     def verify(self, bundles: list[bundle_pb.Bundle]) -> None:
-        verify_tasks = []
         paes = []
         sigs = []
 
@@ -277,12 +279,13 @@ class ECKeyVerifier(Verifier):
             digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
 
             r, s = utils.decode_dss_signature(sig)
-            verify_tasks.append(gsv_verify_t(
-                r=gsv_mem_t.from_buffer_copy(r.to_bytes(32)),
-                s=gsv_mem_t.from_buffer_copy(s.to_bytes(32)),
-                key_x=gsv_mem_t.from_buffer_copy(self.pub_x),
-                key_y=gsv_mem_t.from_buffer_copy(self.pub_y),
-            ))
+            verify_tasks = [gsv_verify_t(
+                r=gsv_mem_t.from_buffer_copy(r.to_bytes(32, byteorder='big')),
+                s=gsv_mem_t.from_buffer_copy(s.to_bytes(32, byteorder='big')),
+                key_x=gsv_mem_t.from_buffer_copy(self._pub_x),
+                key_y=gsv_mem_t.from_buffer_copy(self._pub_y),
+            )]
             ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
             ver_res = self._gsv.verify_exec(self._num_sigs, ver_pending, digests)
-            ver_res = ctypes.cast(ver_res, ctypes.POINTER((gsv_verify_t * self._num_sigs)))
+            ver_res = ver_res[:self._num_sigs]
+            # TODO: verify ec key results

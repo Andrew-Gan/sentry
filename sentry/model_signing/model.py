@@ -25,6 +25,9 @@ from .hashing import hashing
 import collections
 import pathlib
 
+from cuda.bindings import driver
+from .cuda.compiler import checkCudaErrors
+
 PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
@@ -56,15 +59,14 @@ def sign(
         stmnts = []
         hashes = []
         for src, (digest, trueHash) in item.items():
-            manifestItem = manifest.StateManifestItem(
-                state=src, digest=digest)
+            manifestItem = manifest.StateManifestItem(state=src, digest=digest)
             manif = serializer._build_manifest([manifestItem])
             stmnts.append(payload_generator(manif))
             hashes.append([trueHash])
     else:
         manif = serializer.serialize(item, ignore_paths=ignore_paths)
         stmnts = [payload_generator(manif)]
-        hashes = [serializer.hashes_d if hasattr(serializer, 'hashes_d') else None]
+        hashes = [serializer.trueHashes if hasattr(serializer, 'trueHashes') else None]
     return signer.sign(stmnts, hashes)
 
 
@@ -97,13 +99,15 @@ def verify(
 
     if isDigest:
         for src, (digest, trueHash) in item.items():
-            manifestItem = manifest.StateManifestItem(
+            manifest = manifest.StateManifestItem(
                 state=src, digest=digest)
-            local_manifests.append(serializer._build_manifest([manifestItem]))
+            local_manifests.append(serializer._build_manifest([manifest]))
     else:
-        manif = serializer.serialize(item, ignore_paths=ignore_paths)
-        trueHashes = [serializer.hashes_d if hasattr(serializer, 'hashes_d') else None]
-        local_manifests.append(manif)
+        manifest = serializer.serialize(item, ignore_paths=ignore_paths)
+        if hasattr(serializer, 'trueHashes'):
+            for digest, trueHash in zip(manifest._item_to_digest.values(), serializer.trueHashes):
+                checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, 32))
+        local_manifests.append(manifest)
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:

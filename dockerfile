@@ -13,7 +13,7 @@ RUN nvcc -Xcompiler '-fPIC' -o gsv.so -shared gsv.cu
 COPY dataset_formatter /home/dataset_formatter
 COPY cufile.json /home/cufile.json
 ENV CUFILE_ENV_PATH_JSON=/home/cufile.json
-# COPY sentry /home/sentry
+COPY sentry /home/sentry
 
 WORKDIR /home
 COPY *.py hf_access_token /home

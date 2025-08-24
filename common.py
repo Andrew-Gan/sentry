@@ -38,17 +38,17 @@ def get_model(model_name: list, pretrained: bool = False, device: str = 'gpu'):
 def get_image_dataloader(path: str, batch: int, device: str, gds: bool):
     data_path = pathlib.Path(path) / 'data'
     meta_path = pathlib.Path(path) / 'metadata'
-    if device == 'cpu':
-        raise NotImplementedError('Lattice hashing on CPU not supported yet')
-    elif device == 'gpu':
-        hash_batch.hasher = HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
+    if device == 'gpu':
+        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, InputType.DIGEST)
+    if device == 'cpu' and gds:
+        raise RuntimeError('Cannot use cpu with gds')
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_images():
         data = fn.readers.numpy(file_root=data_path, random_shuffle=True,
-            device='cpu' if not gds else device, name='Reader1', seed=0)
+            device='cpu' if not gds else 'gpu', name='Reader1', seed=0)
         metadata = fn.readers.numpy(file_root=meta_path, random_shuffle=True,
-            device='cpu' if not gds else device, name='Reader2', seed=0)
+            device='cpu' if not gds else 'gpu', name='Reader2', seed=0)
         
         if device == 'gpu':
             if not gds:
@@ -79,7 +79,7 @@ def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str,
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
-        hash_batch.hasher = HomomorphicGPU(HashAlgo.LATTICE, InputType.DIGEST)
+        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, InputType.DIGEST)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_texts():

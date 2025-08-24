@@ -98,8 +98,8 @@ class StateSerializer(serialization.Serializer):
               was not initialized with `allow_symlinks=True`.
         """
 
-        manifestItems, hashes_d = self._compute_hash(state)
-        self.hashes_d = hashes_d
+        manifestItems, trueHashes = self._compute_hash(state)
+        self.trueHashes = trueHashes
         return self._build_manifest(manifestItems)
 
     def _compute_hash(
@@ -117,12 +117,12 @@ class StateSerializer(serialization.Serializer):
         """
         digests = self._hasher_factory(state).compute()
 
-        hashes_d = []
+        trueHashes = []
         manifestItems = []
-        for key, (digest, hash) in digests.items():
+        for key, (digest, trueHash) in digests.items():
             manifestItems.append(manifest.StateManifestItem(state=key, digest=digest))
-            hashes_d.append(hash)
-        return manifestItems, hashes_d
+            trueHashes.append(trueHash)
+        return manifestItems, trueHashes
 
     @abc.abstractmethod
     def _build_manifest(
