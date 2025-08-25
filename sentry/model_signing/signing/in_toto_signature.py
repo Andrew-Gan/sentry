@@ -73,5 +73,5 @@ class IntotoVerifier(signing.Verifier):
     def verify(self, signatures: list[signing.Signature]) -> list[manifest_module.Manifest]:
         if not isinstance(signatures[0], IntotoSignature):
             raise TypeError("only list of IntotoSignature is supported")
-        self._sig_verifier.verify([sig._bundle for sig in signatures])
-        return [sig.to_manifest() for sig in signatures]
+        algo = self._sig_verifier.verify([sig._bundle for sig in signatures])
+        return [sig.to_manifest() for sig in signatures], algo

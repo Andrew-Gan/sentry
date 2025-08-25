@@ -18,10 +18,11 @@ import pathlib
 from typing import TypeAlias
 
 from .manifest import manifest
-from .serialization import serialization
+from .serialization import serialization, serialize_by_file, serialize_by_state
 from .signature import verifying
 from .signing import signing
-from .hashing import hashing
+from .hashing import hashing, file, state
+from .hashing.topology import *
 import collections
 import pathlib
 
@@ -32,14 +33,36 @@ PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
 
+def build_serializer(hashAlgo: HashAlgo, topology: Topology,
+    inputType: InputType, device='gpu'):
+
+    if inputType == InputType.DIGEST:
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=None)
+    
+    elif inputType == InputType.FILE:
+        def hasher_factory(item) -> hashing.HashEngine:
+            return file.SimpleFileHasher(
+                file=item, content_hasher=hashAlgo.value[2]())
+        serializer = serialize_by_file.ManifestSerializer(
+            file_hasher_factory=hasher_factory)
+
+    elif inputType == InputType.MODULE:
+        hasher = get_hasher(hashAlgo, topology, inputType, device)
+        def hasher_factory(item) -> hashing.HashEngine:
+            return state.SimpleStateHasher(state=item, content_hasher=hasher)
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=hasher_factory)
+
+    return serializer
 
 def sign(
     item: pathlib.Path | collections.OrderedDict,
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
+    inputType: InputType,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
-    isDigest: bool = False,
 ) -> Iterable[signing.Signature]:
     """Provides a wrapper function for the steps necessary to sign a model.
 
@@ -55,7 +78,7 @@ def sign(
         The model's signature.
     """
 
-    if isDigest:
+    if inputType == InputType.DIGEST:
         stmnts = []
         hashes = []
         for identity, (digest, trueHash) in item.items():
@@ -75,9 +98,8 @@ def verify(
     sig: signing.Signature | Iterable[signing.Signature],
     verifier: signing.Verifier,
     item: pathlib.Path | collections.OrderedDict,
-    serializer: serialization.Serializer,
+    inputType: InputType,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
-    isDigest: bool = False,
 ):
     """Provides a simple wrapper to verify models.
 
@@ -94,10 +116,14 @@ def verify(
     """
     sigs = sig if isinstance(sig, list) else [sig]
 
-    peer_manifests = verifier.verify(sigs)
+    peer_manifests, algo = verifier.verify(sigs)
+    # figure out hashing algorithm from signature
+    topology, hashAlgo = algo.split('-')
+    serializer = build_serializer(HashAlgo[hashAlgo], Topology[topology], inputType)
+
     local_manifests = []
 
-    if isDigest:
+    if inputType == InputType.DIGEST:
         for identity in [next(iter(m._item_to_digest.keys())) for m in peer_manifests]:
             digest, trueHash = item[identity]
             checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))

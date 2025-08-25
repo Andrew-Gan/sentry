@@ -251,7 +251,7 @@ class ECKeyVerifier(Verifier):
         public_key = load_pem_public_key(serialized_key)
         return cls(public_key, device, num_sigs, hasher)
 
-    def verify(self, bundles: list[bundle_pb.Bundle]) -> None:
+    def verify(self, bundles: list[bundle_pb.Bundle]) -> list[str]:
         paes = []
         sigs = []
 
@@ -260,6 +260,7 @@ class ECKeyVerifier(Verifier):
                 bundle.dsse_envelope.payload,
                 statement_pb.Statement(),  # pylint: disable=no-member
             )
+            algo = statement.subject[0].annotations['actual_hash_algorithm']
             paes.append(encoding.pae(statement))
             sigs.append(bundle.dsse_envelope.signatures[0].sig)
 
@@ -290,3 +291,5 @@ class ECKeyVerifier(Verifier):
             ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
             ver_res = self._gsv.verify_exec(self._num_sigs, ver_pending, digests)
             ver_res = ver_res[:self._num_sigs]
+
+        return algo
