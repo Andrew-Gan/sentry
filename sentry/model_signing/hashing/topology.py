@@ -420,9 +420,6 @@ class LatticeGPU(hashing.StreamingHashEngine):
     def __init__(self, hashAlgo, inputType):
         self.hashAlgo = hashAlgo
         self.digestSize = hashAlgo.value[1]
-        self.allocatedSpace = 1
-        self.iDataFull = checkCudaErrors(runtime.cudaMalloc(1))
-        self.oDataFull = checkCudaErrors(runtime.cudaMalloc(1))
         self.digests = {}
         self.totalSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
 
@@ -526,57 +523,45 @@ class LatticeGPU(hashing.StreamingHashEngine):
     
     def update_dataset(self, data: collections.OrderedDict, blockSize) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
-
         blockSizeA = np.array([blockSize], dtype=np.uint64)
-        totalBlocks = 0
+        iData = []
+        oData = []
+        streams = []
         for identity, samples in data.items():
-            # register new hash category in dictionary
+            streams.append(checkCudaErrors(runtime.cudaStreamCreate()))
             if identity not in self.digests:
                 self.digests[identity] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
                 checkCudaErrors(runtime.cudaMemset(self.digests[identity], 0, self.digestSize))
-            partitionBytes = sum([v.nbytes for v in samples])
-            totalBlocks += (partitionBytes + blockSize - 1) // blockSize
-        
-        spaceToAlloc = (totalBlocks + 1) * self.digestSize
-        if self.allocatedSpace < spaceToAlloc:
-            checkCudaErrors(runtime.cudaFree(self.iDataFull))
-            checkCudaErrors(runtime.cudaFree(self.oDataFull))
-            self.iDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
-            self.oDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
-            self.allocatedSpace = spaceToAlloc
+            numBytes = sum([v.nbytes for v in samples])
+            numBlk = (numBytes + blockSize - 1) // blockSize
+            if numBlk % 2 == 1:
+                numBlk += 1
+            iData.append(checkCudaErrors(runtime.cudaMalloc(numBlk*self.digestSize)))
+            oData.append(checkCudaErrors(runtime.cudaMalloc(numBlk*self.digestSize)))
+            bytesOffset = (numBlk - 1) * self.digestSize
+            checkCudaErrors(runtime.cudaMemset(iData[-1]+bytesOffset, 0, self.digestSize))
+            checkCudaErrors(runtime.cudaMemset(oData[-1]+bytesOffset, 0, self.digestSize))
 
-        currBytes = 0
-        for stream, (identity, samples) in zip(streams, data.items()):
-            # if odd number of samples, clear n+1 digest space
-            if len(samples) & 0b1:
-                bytesOffset = currBytes + len(samples) * self.digestSize
-                checkCudaErrors(runtime.cudaMemsetAsync(self.iDataFull+bytesOffset, 0, self.digestSize, stream))
-                checkCudaErrors(runtime.cudaMemsetAsync(self.oDataFull+bytesOffset, 0, self.digestSize, stream))
+        for stream, iDatum, oDatum, (identity, samples) in zip(streams, iData, oData, data.items()):
+            iDatum = np.array([iDatum], dtype=np.uint64)
+            oDatum = np.array([oDatum], dtype=np.uint64)
 
-            samplePtrs = np.array([s.data.ptr for s in samples], dtype=np.uint64)
-            samplePtrsA = checkCudaErrors(runtime.cudaMallocAsync(samplePtrs.nbytes, stream))
-            checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
-                samplePtrs.nbytes, runtime.cudaMemcpyKind.cudaMemcpyHostToDevice, stream))
-
+            samplePtrs = cp.array([s.data.ptr for s in samples], dtype=np.uint64)
             nA = np.array([len(samples)], dtype=np.uint64)
-            iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
-            oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
-            args = [oData, np.array([samplePtrsA], dtype=np.uint64), blockSizeA, nA]
+            args = [oDatum, np.array([samplePtrs.data.ptr], dtype=np.uint64), blockSizeA, nA]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.hashBlock, 1, 1, 1, len(samples), 1, 1, 0, stream,
                 args.ctypes.data, 0,
             ))
-            checkCudaErrors(runtime.cudaFreeAsync(samplePtrsA, stream))
 
             nDigests = len(samples)
             while nDigests > 1:
-                iData, oData = oData, iData
+                iDatum, oDatum = oDatum, iDatum
                 nThread = ((nDigests + 1) >> 1) * 8
                 block = min(512, nThread)
                 grid = (nThread + (block-1)) // block
-                args = [oData, iData, np.array([nThread], dtype=np.uint64)]
+                args = [oDatum, iDatum, np.array([nThread], dtype=np.uint64)]
                 args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
                 checkCudaErrors(driver.cuLaunchKernel(
                     self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
@@ -585,14 +570,13 @@ class LatticeGPU(hashing.StreamingHashEngine):
                 nDigests = grid
 
             # add layer hash to layer sum
-            args = [np.array([self.digests[identity]], dtype=np.uint64), oData, np.array([8], dtype=np.uint64)]
+            digestSum = np.array([self.digests[identity]], dtype=np.uint64)
+            args = [digestSum, oDatum, np.array([8], dtype=np.uint64)]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,
                 stream, args.ctypes.data, 0,
             ))
-
-            currBytes += len(samples) * self.digestSize
 
         for stream in streams:
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
@@ -605,9 +589,9 @@ class LatticeGPU(hashing.StreamingHashEngine):
     @override
     def compute(self) -> collections.OrderedDict:
         digests = {}
-        for key, trueHash in self.digests.items():
-            digest = hashing.Digest(self.digest_name, bytes(range(self.digest_size)))
-            digests[key] = (digest, trueHash)
+        for identity, trueHash in self.digests.items():
+            digest = hashing.Digest(self.digest_name, bytes(range(self.digestSize)))
+            digests[identity] = (digest, trueHash)
         return digests
 
     @property

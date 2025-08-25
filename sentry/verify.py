@@ -17,13 +17,10 @@
 import argparse
 import logging
 import pathlib
-
-from .model_signing.hashing import hashing, file, state
-from .model_signing.serialization import serialize_by_file, serialize_by_state
 from .model_signing.signature import fake
 from .model_signing.signature import key
 from .model_signing.signature import pki
-from .model_signing.signing import in_toto, in_toto_signature
+from .model_signing.signing import in_toto_signature
 from .model_signing.signing import signing
 from .model_signing.signing import sigstore
 from .model_signing.hashing.topology import *
@@ -135,28 +132,3 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
         return sigstore.SigstoreSignature.read(args.sig_path)
     else:
         return in_toto_signature.IntotoSignature.read(args.sig_path)
-
-
-def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
-    args = _arguments()
-    verifier = _get_verifier(args, device, num_sigs)
-    
-    if inputType == InputType.DIGEST:
-        serializer = serialize_by_state.ManifestSerializer(
-            state_hasher_factory=None)
-    
-    elif inputType == InputType.FILE:
-        def hasher_factory(item) -> hashing.HashEngine:
-            return file.SimpleFileHasher(
-                file=item, content_hasher=hashAlgo.value[2]())
-        serializer = serialize_by_file.ManifestSerializer(
-            file_hasher_factory=hasher_factory)
-
-    elif inputType == InputType.MODULE:
-        hasher = get_hasher(hashAlgo, topology, inputType, device)
-        def hasher_factory(item) -> hashing.HashEngine:
-            return state.SimpleStateHasher(state=item, content_hasher=hasher)
-        serializer = serialize_by_state.ManifestSerializer(
-            state_hasher_factory=hasher_factory)
-
-    return verifier, serializer

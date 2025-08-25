@@ -58,8 +58,9 @@ def sign(
     if isDigest:
         stmnts = []
         hashes = []
-        for src, (digest, trueHash) in item.items():
-            manifestItem = manifest.StateManifestItem(state=src, digest=digest)
+        for identity, (digest, trueHash) in item.items():
+            manifestItem = manifest.StateManifestItem(
+                state=identity, digest=digest)
             manif = serializer._build_manifest([manifestItem])
             stmnts.append(payload_generator(manif))
             hashes.append([trueHash])
@@ -111,4 +112,6 @@ def verify(
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:
+            print('peer', peer._item_to_digest)
+            print('local', local._item_to_digest)
             raise verifying.VerificationError(f'the manifests do not match')

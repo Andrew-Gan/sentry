@@ -17,8 +17,6 @@
 import argparse
 import logging
 import pathlib
-from .model_signing.hashing import hashing, file, state
-from .model_signing.serialization import serialize_by_file, serialize_by_state
 from .model_signing.signature import fake
 from .model_signing.signature import key
 from .model_signing.signature import pki
@@ -169,28 +167,3 @@ def _check_pki_options(args: argparse.Namespace):
         exit()
     if args.cert_chain_path == "":
         log.warning("No certificate chain provided")
-
-
-def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
-    args = _arguments()
-    payload_signer = _get_payload_signer(args, device, num_sigs)
-    
-    if inputType == InputType.DIGEST:
-        serializer = serialize_by_state.ManifestSerializer(
-            state_hasher_factory=None)
-    
-    elif inputType == InputType.FILE:
-        def hasher_factory(item) -> hashing.HashEngine:
-            return file.SimpleFileHasher(
-                file=item, content_hasher=hashAlgo.value[2]())
-        serializer = serialize_by_file.ManifestSerializer(
-            file_hasher_factory=hasher_factory)
-
-    elif inputType == InputType.MODULE:
-        hasher = get_hasher(hashAlgo, topology, inputType, device)
-        def hasher_factory(item) -> hashing.HashEngine:
-            return state.SimpleStateHasher(state=item, content_hasher=hasher)
-        serializer = serialize_by_state.ManifestSerializer(
-            state_hasher_factory=hasher_factory)
-
-    return payload_signer, serializer

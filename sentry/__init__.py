@@ -1,9 +1,11 @@
 from . import sign
 from . import verify
 from .model_signing import model
+from .model_signing.hashing import hashing, file, state
 from .model_signing.hashing.topology import *
 from .model_signing.signature import verifying
 from .model_signing.signing import in_toto
+from .model_signing.serialization import serialize_by_file, serialize_by_state
 
 import pathlib
 import torch
@@ -12,14 +14,39 @@ import os
 
 log = logging.getLogger(__name__)
 
+def build_serializer(hashAlgo: HashAlgo, topology: Topology,
+    inputType: InputType, device='gpu'):
+
+    if inputType == InputType.DIGEST:
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=None)
+    
+    elif inputType == InputType.FILE:
+        def hasher_factory(item) -> hashing.HashEngine:
+            return file.SimpleFileHasher(
+                file=item, content_hasher=hashAlgo.value[2]())
+        serializer = serialize_by_file.ManifestSerializer(
+            file_hasher_factory=hasher_factory)
+
+    elif inputType == InputType.MODULE:
+        hasher = get_hasher(hashAlgo, topology, inputType, device)
+        def hasher_factory(item) -> hashing.HashEngine:
+            return state.SimpleStateHasher(state=item, content_hasher=hasher)
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=hasher_factory)
+
+    return serializer
+
 def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
     args = sign._arguments()
     if isinstance(item, str):
-        signer, serializer = sign.build(hashAlgo, topology, InputType.FILE, 'cpu')
+        signer = sign._get_payload_signer(args, 'cpu')
+        serializer = build_serializer(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
         dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        signer, serializer = sign.build(hashAlgo, topology, InputType.MODULE, dev)
+        signer = sign._get_payload_signer(args, dev)
+        serializer = build_serializer(hashAlgo, topology, InputType.MODULE, dev)
         item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
@@ -35,8 +62,9 @@ def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE)
 
 
 def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
-    signer, serializer = sign.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
     args = sign._arguments()
+    signer = sign._get_payload_signer(args, 'gpu', len(item))
+    serializer = build_serializer(hashAlgo, topology, InputType.DIGEST, 'gpu')
     sigs = model.sign(
         item=item,
         signer=signer,
@@ -53,11 +81,13 @@ def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLAC
     args.sig_path = args.sig_path / pathlib.Path('model.sig')
     sig = verify._get_signature(args)
     if isinstance(item, str):
-        verifier, serializer = verify.build(hashAlgo, topology, InputType.FILE, 'cpu')
+        verifier = verify._get_verifier(args, 'cpu')
+        serializer = build_serializer(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
         dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        verifier, serializer = verify.build(hashAlgo, topology, InputType.MODULE, dev)
+        verifier = verify._get_verifier(args, 'gpu')
+        serializer = build_serializer(hashAlgo, topology, InputType.MODULE, dev)
         item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
@@ -77,12 +107,13 @@ def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLAC
 
 
 def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
-    verifier, serializer = verify.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
+    serializer = build_serializer(hashAlgo, topology, InputType.DIGEST, 'gpu')
     args = verify._arguments()
-    sig_path = args.sig_path
+    verifier = verify._get_verifier(args, 'gpu', len(item))
     sig = []
+    sig_path = args.sig_path
 
-    for filename in os.listdir(sig_path):
+    for filename in os.listdir(args.sig_path):
         if filename.startswith('dataset_') and filename.endswith('.sig'):
             args.sig_path = sig_path / pathlib.Path(filename)
             sig.append(verify._get_signature(args))
