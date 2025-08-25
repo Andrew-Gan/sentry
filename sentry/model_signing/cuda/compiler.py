@@ -1,4 +1,4 @@
-from cuda.bindings import driver, nvrtc, runtime
+from cuda.bindings import driver, nvrtc
 import numpy as np
 import os
 
@@ -25,7 +25,7 @@ def checkCudaErrors(result):
     
 
 def compileCuda(srcPath: str, function_names: list[str], flags=[]):
-    cuDevice = checkCudaErrors(runtime.cudaGetDevice())
+    cuDevice = checkCudaErrors(driver.cuDeviceGet(0))
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     if repr(ctx) == '<CUcontext 0x0>':
         ctx = checkCudaErrors(driver.cuCtxCreate(0, cuDevice))
@@ -54,7 +54,7 @@ def compileCuda(srcPath: str, function_names: list[str], flags=[]):
         bytes(srcPath, 'utf-8'), 0, [], []))
     
     # compile code into program and extract ptx
-    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts) # file bug for changing digest map values
+    err = nvrtc.nvrtcCompileProgram(prog, len(opts), opts)
     if err[0] != nvrtc.nvrtcResult.NVRTC_SUCCESS:
         logSize = checkCudaErrors(nvrtc.nvrtcGetProgramLogSize(prog))
         log = bytes(logSize)

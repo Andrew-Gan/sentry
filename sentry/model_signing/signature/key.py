@@ -172,7 +172,7 @@ class ECKeySigner(Signer):
             
             self._hasher.update(paes)
             digestMap = self._hasher.compute()
-            digests = [v[1] for k, v in digestMap.items()]
+            digests = [v[1] for k, v in digestMap.items() if k != 'all']
             digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
 
             sign_tasks = [gsv_sign_t(
@@ -193,8 +193,7 @@ class ECKeySigner(Signer):
                     hash_hex_h = bytes(hash_hex_d.nbytes)
                     checkCudaErrors(driver.cuMemcpyDtoH(hash_hex_h, hash_hex_d.data.ptr, hash_hex_d.nbytes))
                     stmnt.pb.subject[i].digest.update({'hash': hash_hex_h.decode()})
-            x = json_format.MessageToJson(stmnt.pb)
-            payload = x.encode()
+            payload = json_format.MessageToJson(stmnt.pb).encode()
             env = intoto_pb.Envelope(
                 payload=payload,
                 payload_type=encoding.PAYLOAD_TYPE,
@@ -276,10 +275,9 @@ class ECKeyVerifier(Verifier):
             paes_d = {}
             for i, (pae, sig) in enumerate(zip(paes, sigs)):
                 paes_d[i] = cp.frombuffer(pae, dtype=cp.uint8)
-
             self._hasher.update(paes_d)
             digestMap = self._hasher.compute()
-            digests = [v[1] for k, v in digestMap.items()]
+            digests = [v[1] for k, v in digestMap.items() if k != 'all']
             digests = (ctypes.c_uint64 * self._num_sigs)(*digests)
 
             r, s = utils.decode_dss_signature(sig)
@@ -292,4 +290,3 @@ class ECKeyVerifier(Verifier):
             ver_pending = (gsv_verify_t * self._num_sigs)(*verify_tasks)
             ver_res = self._gsv.verify_exec(self._num_sigs, ver_pending, digests)
             ver_res = ver_res[:self._num_sigs]
-            # TODO: verify ec key results

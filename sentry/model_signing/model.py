@@ -34,7 +34,7 @@ PayloadGeneratorFunc: TypeAlias = Callable[
 
 
 def sign(
-    item: pathlib.Path | collections.OrderedDict | Iterable[hashing.Digest],
+    item: pathlib.Path | collections.OrderedDict,
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
     serializer: serialization.Serializer,
@@ -73,7 +73,7 @@ def sign(
 def verify(
     sig: signing.Signature | Iterable[signing.Signature],
     verifier: signing.Verifier,
-    item: pathlib.Path | collections.OrderedDict | Iterable[hashing.Digest],
+    item: pathlib.Path | collections.OrderedDict,
     serializer: serialization.Serializer,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
     isDigest: bool = False,
@@ -91,17 +91,16 @@ def verify(
     Raises:
         verifying.VerificationError: on any verification error.
     """
-    items = item if isinstance(item, list) else [item]
     sigs = sig if isinstance(sig, list) else [sig]
 
     peer_manifests = verifier.verify(sigs)
     local_manifests = []
 
     if isDigest:
-        for src, (digest, trueHash) in item.items():
+        for identity in [next(iter(m._item_to_digest.keys())) for m in peer_manifests]:
+            digest, trueHash = item[identity]
             checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))
-            manifestItem = manifest.StateManifestItem(
-                state=src, digest=digest)
+            manifestItem = manifest.StateManifestItem(state=identity, digest=digest)
             local_manifests.append(serializer._build_manifest([manifestItem]))
     else:
         manifestItem = serializer.serialize(item, ignore_paths=ignore_paths)

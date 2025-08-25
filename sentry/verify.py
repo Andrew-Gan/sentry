@@ -97,7 +97,8 @@ def _arguments() -> argparse.Namespace:
 def _get_verifier(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing.Verifier:
     if args.method == "private-key":
         _check_private_key_flags(args)
-        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_INPLACE) if device=='gpu' else None
+        # use layered to hash multiple identity statements in parallel on GPU
+        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         return in_toto_signature.IntotoVerifier(verifier)
     elif args.method == "pki":
@@ -139,7 +140,6 @@ def _get_signature(args: argparse.Namespace) -> signing.Signature:
 def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
     args = _arguments()
     verifier = _get_verifier(args, device, num_sigs)
-    hasher = None
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(
@@ -159,6 +159,4 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='
         serializer = serialize_by_state.ManifestSerializer(
             state_hasher_factory=hasher_factory)
 
-    return hasher, verifier, serializer
-
-
+    return verifier, serializer

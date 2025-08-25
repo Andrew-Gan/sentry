@@ -434,13 +434,6 @@ class LatticeGPU(hashing.StreamingHashEngine):
         elif inputType == InputType.DIGEST:
             self.ctx, [self.hashBlock, self.reduce] = compileCuda(
                 myPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
-    
-    def __exit__(self):
-        checkCudaErrors(runtime.cudaFree(self.iDataFull))
-        checkCudaErrors(runtime.cudaFree(self.oDataFull))
-        for s in self.digests:
-            checkCudaErrors(runtime.cudaFree(s[0]))
-        checkCudaErrors(runtime.cudaFree(self.totalSum))
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
@@ -537,10 +530,11 @@ class LatticeGPU(hashing.StreamingHashEngine):
 
         blockSizeA = np.array([blockSize], dtype=np.uint64)
         totalBlocks = 0
-        for source, samples in data.items():
+        for identity, samples in data.items():
             # register new hash category in dictionary
-            if source not in self.digests:
-                self.digests[source] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+            if identity not in self.digests:
+                self.digests[identity] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+                checkCudaErrors(runtime.cudaMemset(self.digests[identity], 0, self.digestSize))
             partitionBytes = sum([v.nbytes for v in samples])
             totalBlocks += (partitionBytes + blockSize - 1) // blockSize
         
@@ -553,7 +547,13 @@ class LatticeGPU(hashing.StreamingHashEngine):
             self.allocatedSpace = spaceToAlloc
 
         currBytes = 0
-        for stream, (src, samples) in zip(streams, data.items()):
+        for stream, (identity, samples) in zip(streams, data.items()):
+            # if odd number of samples, clear n+1 digest space
+            if len(samples) & 0b1:
+                bytesOffset = currBytes + len(samples) * self.digestSize
+                checkCudaErrors(runtime.cudaMemsetAsync(self.iDataFull+bytesOffset, 0, self.digestSize, stream))
+                checkCudaErrors(runtime.cudaMemsetAsync(self.oDataFull+bytesOffset, 0, self.digestSize, stream))
+
             samplePtrs = np.array([s.data.ptr for s in samples], dtype=np.uint64)
             samplePtrsA = checkCudaErrors(runtime.cudaMallocAsync(samplePtrs.nbytes, stream))
             checkCudaErrors(runtime.cudaMemcpyAsync(samplePtrsA, samplePtrs.ctypes.data,
@@ -583,9 +583,9 @@ class LatticeGPU(hashing.StreamingHashEngine):
                     stream, args.ctypes.data, 0,
                 ))
                 nDigests = grid
-            
+
             # add layer hash to layer sum
-            args = [np.array([self.digests[src]], dtype=np.uint64), oData, np.array([8], dtype=np.uint64)]
+            args = [np.array([self.digests[identity]], dtype=np.uint64), oData, np.array([8], dtype=np.uint64)]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
             checkCudaErrors(driver.cuLaunchKernel(
                 self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,

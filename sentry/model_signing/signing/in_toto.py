@@ -672,7 +672,7 @@ class DigestsIntotoPayload(IntotoPayload):
             algorithm = subject["annotations"]["actual_hash_algorithm"]
             digest_value = subject["digest"]["hash"]
             digest = hashing.Digest(algorithm, bytes.fromhex(digest_value))
-            if any(word in algorithm for word in ['MERKLE', 'LATTICE']): #TODO: find a better way to detect statelevelmanifests
+            if any(word in algorithm for word in ['MERKLE', 'LATTICE']):
                 layer = subject["name"]
                 item = manifest_module.StateManifestItem(state=layer, digest=digest)
             else:

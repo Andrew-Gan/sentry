@@ -8,18 +8,18 @@ from .model_signing.signing import in_toto
 import pathlib
 import torch
 import logging
+import os
 
 log = logging.getLogger(__name__)
 
 def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
-    global sign
     args = sign._arguments()
     if isinstance(item, str):
-        _, signer, serializer = sign.build(hashAlgo, topology, InputType.FILE, 'cpu')
+        signer, serializer = sign.build(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
         dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        _, signer, serializer = sign.build(hashAlgo, topology, InputType.MODULE, dev)
+        signer, serializer = sign.build(hashAlgo, topology, InputType.MODULE, dev)
         item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
@@ -35,8 +35,7 @@ def sign_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE)
 
 
 def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
-    global sign
-    _, signer, serializer = sign.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
+    signer, serializer = sign.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
     args = sign._arguments()
     sigs = model.sign(
         item=item,
@@ -45,21 +44,20 @@ def sign_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topo
         serializer=serializer,
         isDigest=True,
     )
-    for i, sig in enumerate(sigs):
-        sig.write(args.sig_out / pathlib.Path(f'dataset_{i}.sig'))
+    for src, sig in zip(item.keys(), sigs):
+        sig.write(args.sig_out / pathlib.Path(f'dataset_{src}.sig'))
 
 
 def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
-    global verify
     args = verify._arguments()
     args.sig_path = args.sig_path / pathlib.Path('model.sig')
     sig = verify._get_signature(args)
     if isinstance(item, str):
-        _, verifier, serializer = verify.build(hashAlgo, topology, InputType.FILE, 'cpu')
+        verifier, serializer = verify.build(hashAlgo, topology, InputType.FILE, 'cpu')
         item = pathlib.Path(item)
     elif isinstance(item, torch.nn.Module):
         dev = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        _, verifier, serializer = verify.build(hashAlgo, topology, InputType.MODULE, dev)
+        verifier, serializer = verify.build(hashAlgo, topology, InputType.MODULE, dev)
         item = item.state_dict()
     else:
         raise TypeError('item is neither str nor torch module')
@@ -79,14 +77,15 @@ def verify_model(item, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLAC
 
 
 def verify_dataset(item: collections.OrderedDict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
-    global verify
-    _, verifier, serializer = verify.build(hashAlgo, topology, InputType.DIGEST)
+    verifier, serializer = verify.build(hashAlgo, topology, InputType.DIGEST, 'gpu', len(item))
     args = verify._arguments()
     sig_path = args.sig_path
     sig = []
-    for i in range(len(item)):
-        args.sig_path = sig_path / pathlib.Path(f'dataset_{i}.sig')
-        sig.append(verify._get_signature(args))
+
+    for filename in os.listdir(sig_path):
+        if filename.startswith('dataset_') and filename.endswith('.sig'):
+            args.sig_path = sig_path / pathlib.Path(filename)
+            sig.append(verify._get_signature(args))
     try:
         model.verify(
             sig=sig,

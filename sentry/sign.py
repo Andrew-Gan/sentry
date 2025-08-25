@@ -121,7 +121,8 @@ def _arguments() -> argparse.Namespace:
 def _get_payload_signer(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing.Signer:
     if args.method == "private-key":
         _check_private_key_options(args)
-        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_INPLACE) if device=='gpu' else None
+        # use layered to hash multiple identity statements in parallel on GPU
+        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,
@@ -173,7 +174,6 @@ def _check_pki_options(args: argparse.Namespace):
 def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='gpu', num_sigs=1):
     args = _arguments()
     payload_signer = _get_payload_signer(args, device, num_sigs)
-    hasher = None
     
     if inputType == InputType.DIGEST:
         serializer = serialize_by_state.ManifestSerializer(
@@ -188,10 +188,9 @@ def build(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device='
 
     elif inputType == InputType.MODULE:
         hasher = get_hasher(hashAlgo, topology, inputType, device)
-
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
             state_hasher_factory=hasher_factory)
 
-    return hasher, payload_signer, serializer
+    return payload_signer, serializer

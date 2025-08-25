@@ -1,15 +1,16 @@
 #!/bin/bash
 
 # Init
+# module load conda cuda
 # conda create --name sentry python=3.10
 # conda activate sentry
 # pip install -r requirements.txt
 
-# conda config --set channel_priority flexible 
-
 # nvcc -Xcompiler '-fPIC' -o ./RapidEC/gsv.so -shared ./RapidEC/gsv.cu
+# python agent_dataset.py uoft-cs/cifar10 16 1 /scratch/gautschi/gan35/dataset/cifar10
 
 # Run
+# module load conda cuda
 # conda activate sentry
 # sbatch --nodes=1 --ntasks=64 --gpus-per-node=1 --partition=smallgpu --account=zghodsi --qos=normal slurm-gautschi.sh
 
