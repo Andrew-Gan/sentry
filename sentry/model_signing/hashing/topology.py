@@ -10,7 +10,7 @@ from enum import Enum, IntEnum
 
 from typing_extensions import override
 
-# cuda source file, digest size, hashlib module
+# (source file, digest size, cpu module)
 class HashAlgo(Enum):
     SHA256   = ('sha256.cuh', 32, memory.SHA256)
     BLAKE2B  = ('blake2b.cuh', 64, memory.BLAKE2)
@@ -23,14 +23,6 @@ class Topology(IntEnum):
     MERKLE_LAYERED   = 2
     MERKLE_INPLACE   = 3
     LATTICE = 4
-
-class InputType(IntEnum):
-    """
-    FILE mode uses Hashlib/Sigstore, MODULE or DIGEST mode uses Sentry
-    """
-    FILE = 0
-    MODULE = 1
-    DIGEST = 2
 
 srcPath = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     'model_signing', 'cuda', 'topology')
@@ -417,7 +409,7 @@ class MerkleGPU(hashing.StreamingHashEngine):
         return self.digestSize
 
 class LatticeGPU(hashing.StreamingHashEngine):
-    def __init__(self, hashAlgo, inputType):
+    def __init__(self, hashAlgo, isDataset=True):
         self.hashAlgo = hashAlgo
         self.digestSize = hashAlgo.value[1]
         self.digests = {}
@@ -425,12 +417,13 @@ class LatticeGPU(hashing.StreamingHashEngine):
 
         global srcPath
         myPath = os.path.join(srcPath, hashAlgo.value[0])
-        if inputType == InputType.MODULE:
-            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
-                myPath, ['hash_ltHash', 'reduce_ltHash'])
-        elif inputType == InputType.DIGEST:
+        if isDataset:
             self.ctx, [self.hashBlock, self.reduce] = compileCuda(
                 myPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
+        else:
+            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
+                myPath, ['hash_ltHash', 'reduce_ltHash'])
+            
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
@@ -604,7 +597,7 @@ class LatticeGPU(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self.digestSize
 
-def get_hasher(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, device: str):
+def get_model_hasher(hashAlgo: HashAlgo, topology: Topology, device: str):
     hasher = None
     if device == 'cpu':
         if topology >= Topology.MERKLE_LAYERED and topology <= Topology.MERKLE_INPLACE:
@@ -615,10 +608,10 @@ def get_hasher(hashAlgo: HashAlgo, topology: Topology, inputType: InputType, dev
         elif topology >= Topology.MERKLE_COALESCED and topology <= Topology.MERKLE_INPLACE:
             hasher = MerkleGPU(hashAlgo, topology)
         elif topology == Topology.LATTICE:
-            hasher = LatticeGPU(hashAlgo, inputType)
+            hasher = LatticeGPU(hashAlgo, False)
 
     if not hasher:
         raise NotImplementedError(f'Unsupported for {hashAlgo.name}, \
-            {topology.name}, {inputType.name}, {device}')
+            {topology.name}, {device}')
 
     return hasher

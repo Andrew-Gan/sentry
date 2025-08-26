@@ -14,6 +14,8 @@
 #define BLAKE2B_STATE_SIZE 16
 #define BLAKE2B_STATE_LENGTH (BLAKE2B_STATE_SIZE * sizeof(int64_t))
 
+#include <cuda/std/cstdint>
+
 typedef struct {
     uint32_t digestlen;
     uint8_t key[64];

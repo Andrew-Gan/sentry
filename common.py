@@ -39,7 +39,7 @@ def get_image_dataloader(path: str, batch: int, device: str, gds: bool):
     data_path = pathlib.Path(path) / 'data'
     meta_path = pathlib.Path(path) / 'metadata'
     if device == 'gpu':
-        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, InputType.DIGEST)
+        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, True)
     if device == 'cpu' and gds:
         raise RuntimeError('Cannot use cpu with gds')
 
@@ -79,7 +79,7 @@ def get_text_dataloader(data_path: str, meta_path: str, batch: int, device: str,
     if device == 'cpu':
         raise NotImplementedError('Lattice hashing on CPU not supported yet')
     elif device == 'gpu':
-        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, InputType.DIGEST)
+        hash_batch.hasher = LatticeGPU(HashAlgo.BLAKE2XB, True)
 
     @pipeline_def(num_threads=8, device_id=0)
     def get_dali_pipeline_texts():

@@ -70,8 +70,8 @@ docker compose up --build sentry_inferencer
 ### Native run
 ```
 python agent_dataset.py uoft-cs/cifar10 16 1 dataset/cifar10
-python agent_trainer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
-python agent_inferencer.py --sig_out /home/signatures --model_path /home/torch private-key --private_key private.pem
+python agent_trainer.py --sig_out ./signatures --model_path ./torch private-key --private_key private.pem
+python agent_inferencer.py --sig_out ./signatures --model_path ./torch private-key --private_key private.pem
 ```
 
 ## Example
@@ -124,10 +124,17 @@ been tampered with after training.
 We are able to sign large models with very good performance, as the following
 table shows:
 
-| Model              | Size  |  Sign Time | Verify Time |
-|--------------------|-------|:----------:|:-----------:|
-| roberta-base-11    | 8K    | 1s         | 0.6s        |
-| hustvl/YOLOP       | 215M  | 1s         | 1s          |
-| bertseq2seq        | 2.8G  | 1.9s       | 1.4s        |
-| bert-base-uncased  | 3.3G  | 1.6s       | 1.1s        |
-| tiiuae/falcon-7b   | 14GB  | 2.1s       | 1.8s        |
+| Model                         | Size  |  Hash Time |
+|-------------------------------|-------|:----------:|
+| microsoft/resnet-152          | 270M  | 5.5 ms     |
+| google-bert/bert-base-uncased | 538M  | 11.4 ms    |
+| pytorch/vision/vgg19          | 1.1G  | 29.1 ms    |
+| openai-community/gpt2         | 1.1G  | 32.3 ms    |
+| openai-community/gpt2-xl      | 8.6G  | 296.6 ms   |
+
+
+## Contributions
+
+### Adding a new CUDA kernel for hashing
+`cd sentry/model_signing/cuda`
+`cd sentry/model_signing/hashing/topology.py`

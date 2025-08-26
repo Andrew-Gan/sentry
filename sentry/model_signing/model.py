@@ -16,6 +16,7 @@
 from collections.abc import Callable, Iterable
 import pathlib
 from typing import TypeAlias
+import torch
 
 from .manifest import manifest
 from .serialization import serialization, serialize_by_file, serialize_by_state
@@ -23,8 +24,6 @@ from .signature import verifying
 from .signing import signing
 from .hashing import hashing, file, state
 from .hashing.topology import *
-import collections
-import pathlib
 
 from cuda.bindings import driver
 from .cuda.compiler import checkCudaErrors
@@ -33,35 +32,34 @@ PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
 
-def build_serializer(hashAlgo: HashAlgo, topology: Topology,
-    inputType: InputType, device='gpu'):
-
-    if inputType == InputType.DIGEST:
-        serializer = serialize_by_state.ManifestSerializer(
-            state_hasher_factory=None)
-    
-    elif inputType == InputType.FILE:
+def build_serializer(item, hashAlgo: HashAlgo, topology: Topology):
+    if isinstance(item, pathlib.Path):
         def hasher_factory(item) -> hashing.HashEngine:
             return file.SimpleFileHasher(
                 file=item, content_hasher=hashAlgo.value[2]())
         serializer = serialize_by_file.ManifestSerializer(
             file_hasher_factory=hasher_factory)
 
-    elif inputType == InputType.MODULE:
-        hasher = get_hasher(hashAlgo, topology, inputType, device)
+    elif isinstance(item, torch.nn.Module):
+        device = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
+        hasher = get_model_hasher(hashAlgo, topology, device)
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
             state_hasher_factory=hasher_factory)
 
+    elif isinstance(item, dict):
+        serializer = serialize_by_state.ManifestSerializer(
+            state_hasher_factory=None)
+
     return serializer
 
 def sign(
-    item: pathlib.Path | collections.OrderedDict,
+    item: pathlib.Path | torch.nn.Module | dict,
     signer: signing.Signer,
     payload_generator: PayloadGeneratorFunc,
-    serializer: serialization.Serializer,
-    inputType: InputType,
+    hashAlgo: HashAlgo,
+    topology: Topology,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
 ) -> Iterable[signing.Signature]:
     """Provides a wrapper function for the steps necessary to sign a model.
@@ -78,9 +76,10 @@ def sign(
         The model's signature.
     """
 
-    if inputType == InputType.DIGEST:
+    if isinstance(item, dict):
         stmnts = []
         hashes = []
+        serializer = build_serializer(item, hashAlgo, topology)
         for identity, (digest, trueHash) in item.items():
             manifestItem = manifest.StateManifestItem(
                 state=identity, digest=digest)
@@ -88,6 +87,9 @@ def sign(
             stmnts.append(payload_generator(manif))
             hashes.append([trueHash])
     else:
+        serializer = build_serializer(item, hashAlgo, topology)
+        if isinstance(item, torch.nn.Module):
+            item = item.state_dict()
         manif = serializer.serialize(item, ignore_paths=ignore_paths)
         stmnts = [payload_generator(manif)]
         hashes = [serializer.trueHashes if hasattr(serializer, 'trueHashes') else None]
@@ -97,8 +99,7 @@ def sign(
 def verify(
     sig: signing.Signature | Iterable[signing.Signature],
     verifier: signing.Verifier,
-    item: pathlib.Path | collections.OrderedDict,
-    inputType: InputType,
+    item: pathlib.Path | torch.nn.Module | dict,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
 ):
     """Provides a simple wrapper to verify models.
@@ -119,17 +120,19 @@ def verify(
     peer_manifests, algo = verifier.verify(sigs)
     # figure out hashing algorithm from signature
     topology, hashAlgo = algo.split('-')
-    serializer = build_serializer(HashAlgo[hashAlgo], Topology[topology], inputType)
+    serializer = build_serializer(item, HashAlgo[hashAlgo], Topology[topology])
 
     local_manifests = []
 
-    if inputType == InputType.DIGEST:
+    if isinstance(item, dict):
         for identity in [next(iter(m._item_to_digest.keys())) for m in peer_manifests]:
             digest, trueHash = item[identity]
             checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))
             manifestItem = manifest.StateManifestItem(state=identity, digest=digest)
             local_manifests.append(serializer._build_manifest([manifestItem]))
     else:
+        if isinstance(item, torch.nn.Module):
+            item = item.state_dict()
         manifestItem = serializer.serialize(item, ignore_paths=ignore_paths)
         if hasattr(serializer, 'trueHashes'):
             for digest, trueHash in zip(manifestItem._item_to_digest.values(), serializer.trueHashes):
@@ -138,6 +141,4 @@ def verify(
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:
-            print('peer', peer._item_to_digest)
-            print('local', local._item_to_digest)
             raise verifying.VerificationError(f'the manifests do not match')

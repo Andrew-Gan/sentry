@@ -1,7 +1,6 @@
 #!/bin/bash
 
 # Init
-# module --force purge
 # module load cuda gcc
 # python -m venv .venv
 # pip install -r requirements.txt
@@ -9,7 +8,6 @@
 # python agent_dataset.py uoft-cs/cifar10 16 1 ./dataset/cifar10
 
 # Run
-# module --force purge
 # module load cuda gcc
 # source .venv/bin/activate
 # sbatch -A zghodsi -p a30 --mem=8G --gres=gpu:1 slurm-gilbreth.sh
