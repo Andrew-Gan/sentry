@@ -7,6 +7,7 @@ from transformers import AutoImageProcessor, AutoModelForImageClassification
 from transformers import AutoTokenizer, AutoModelForMaskedLM, AutoModelForCausalLM
 import torchvision
 import pathlib
+from cuda.bindings import driver
 
 def hash_batch(data: list, metadata: list):
     partitions = {}

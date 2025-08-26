@@ -4,6 +4,8 @@ import sentry
 from huggingface_hub import login
 from sentry.model_signing.hashing.topology import *
 
+import time
+
 if __name__ == '__main__':
     with open('hf_access_token', 'r') as f:
         login(token=f.read().rstrip())
@@ -20,9 +22,18 @@ if __name__ == '__main__':
         gds=False,
     )
 
+    # pre init gds
     for data in dataloader:
         x, y = data[0]['data'], data[0]['label']
         # pred = model(x)
+
+    start = time.perf_counter()
+    for data in dataloader:
+        x, y = data[0]['data'], data[0]['label']
+        # pred = model(x)
+    end = time.perf_counter()
+    print(f'[Trainer] Dataset runtime: {1000*(end-start):.2f} ms')
+    print('[Inferencer] Model inference complete')
 
     sentry.verify_dataset(hasher.compute())
     print('[Inferencer] Dataset verification complete')
