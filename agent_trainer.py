@@ -4,11 +4,27 @@ import sentry
 from huggingface_hub import login
 from sentry.model_signing.hashing.topology import *
 
+import time
+
 if __name__ == '__main__':
     with open('hf_access_token', 'r') as f:
         login(token=f.read().rstrip())
 
-    model = get_model('vgg19', pretrained=True, device='gpu')
+    for modelName in ['resnet152', 'bert', 'vgg19', 'gpt2', 'gpt2-xl']:
+        model = get_model(modelName, pretrained=True, device='gpu')
+        for hashAlgo in HashAlgo:
+            for topology in Topology:
+                if topology == Topology.SERIAL:
+                    continue
+                for workflow in Workflow:
+                    if topology == Topology.LATTICE and hashAlgo != HashAlgo.BLAKE2XB:
+                        continue
+                    if workflow == Workflow.LAYERED_SORTED and topology != Topology.LATTICE:
+                        continue
+                    filename = f'{topology.name}-{workflow.name}-{hashAlgo.name}.sig'
+                    print(filename)
+                    sentry.sign_model(model, hashAlgo, topology, workflow, filename)
+    print('[Trainer] Model signing complete')
 
     dataloader, hasher = get_image_dataloader(
         path=pathlib.Path('dataset/cifar10'),
@@ -17,12 +33,12 @@ if __name__ == '__main__':
         gds=False,
     )
 
+    start = time.perf_counter()
     for data in dataloader:
         x, y = data[0]['data'], data[0]['label']
         # pred = model(x)
+    end = time.perf_counter()
+    print(f'[Trainer] Dataset runtime: {1000*(end-start):.2f} ms')
 
     sentry.sign_dataset(hasher.compute())
     print('[Trainer] Dataset signing complete')
-
-    sentry.sign_model(model)
-    print('[Trainer] Model signing complete')
