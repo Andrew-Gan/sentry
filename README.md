@@ -111,6 +111,16 @@ for data in dataloader:
 sentry.verify_dataset(hasher.compute())
 ```
 
+## Configuration
+
+While the default setting uses a Merkle Tree with SHA256 to hash models, the signer may configure the hashing protocol with a combination of the settings below.
+
+| Settings | Supported Options               | Restrictions                 |
+|----------|---------------------------------|------------------------------|
+| Topology | Merkle, Lattice                 | Lattice must use BLAKE2XB    |
+| HashAlgo | SHA256, Blake2B, SHA3, BLAKE2XB |                              |
+| Workflow | Coalesced, Layered, Inplace     |                              |
+
 ## Evaluation
 
 This project demonstrates how to protect the integrity of a model by signing it

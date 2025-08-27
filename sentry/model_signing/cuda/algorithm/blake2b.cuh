@@ -7,6 +7,7 @@
  * This file is released into the Public Domain.
  */
 
+#define OUT_BYTES 64UL
 #define BLAKE2B_ROUNDS 12
 #define BLAKE2B_BLOCK_LENGTH 128
 #define BLAKE2B_CHAIN_SIZE 8
@@ -121,7 +122,7 @@ __device__ void init(BLAKE2B_CTX *ctx) {
     const uint64_t keylen = sizeof(key);
 
     ctx->keylen = keylen;
-    ctx->digestlen = 64 >> 3;
+    ctx->digestlen = 64;
     ctx->pos = 0;
     ctx->t0 = 0;
     ctx->t1 = 0;
@@ -177,7 +178,7 @@ __device__ void update(BLAKE2B_CTX *ctx, uint8_t *data, uint64_t len) {
     ctx->pos += len - in_index;
 }
 
-__device__ void final(BLAKE2B_CTX *ctx, uint8_t* out) {
+__device__ void final(BLAKE2B_CTX *ctx, uint8_t *out) {
     ctx->f0 = 0xFFFFFFFFFFFFFFFFL;
     ctx->t0 += ctx->pos;
     if (ctx->pos > 0 && ctx->t0 == 0)
@@ -188,7 +189,7 @@ __device__ void final(BLAKE2B_CTX *ctx, uint8_t* out) {
     memset(ctx->state, 0, BLAKE2B_STATE_LENGTH);
 
     for (int i = 0; i < BLAKE2B_CHAIN_SIZE && (i*8 < ctx->digestlen); i++) {
-        uint8_t * tmp = (uint8_t*)(&ctx->chain[i]);
+        uint8_t *tmp = (uint8_t*)(&ctx->chain[i]);
         if (i*8 < ctx->digestlen - 8)
             memcpy(out + i*8, tmp, 8);
         else

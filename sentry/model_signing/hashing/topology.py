@@ -10,19 +10,23 @@ from enum import Enum, IntEnum
 
 from typing_extensions import override
 
-# (source file, digest size, cpu module)
+# (source file, digest size, hashlib)
 class HashAlgo(Enum):
-    SHA256   = ('sha256.cuh', 32, memory.SHA256)
-    BLAKE2B  = ('blake2b.cuh', 64, memory.BLAKE2)
-    SHA3     = ('sha3.cuh', 64, memory.SHA3)
-    BLAKE2XB = ('lattice.cuh', 64)
+    SHA256   = ('../algorithm/sha256.cuh', 32, memory.SHA256)
+    BLAKE2B  = ('../algorithm/blake2b.cuh', 64, memory.BLAKE2)
+    SHA3     = ('../algorithm/sha3.cuh', 64, memory.SHA3)
+    BLAKE2XB = ('../algorithm/blake2xb.cuh', 64, None)
 
-class Topology(IntEnum):
-    SERIAL = 0
-    MERKLE_COALESCED = 1
-    MERKLE_LAYERED   = 2
-    MERKLE_INPLACE   = 3
-    LATTICE = 4
+class Topology(Enum):
+    SERIAL  = 'serial.cuh'
+    MERKLE  = 'merkle.cuh'
+    LATTICE = 'lattice.cuh'
+
+class Workflow(IntEnum):
+    COALESCED       = 0
+    LAYERED         = 1
+    INPLACE         = 2
+    LAYERED_SORTED  = 3
 
 srcPath = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
     'model_signing', 'cuda', 'topology')
@@ -32,7 +36,7 @@ class SeqGPU(hashing.StreamingHashEngine):
         self.digestSize = hashAlgo.value[1]
         global srcPath
         myPath = os.path.join(srcPath, 'serial.cuh')
-        self.ctx, [self.hash] = compileCuda(myPath, [f'hash'], [hashAlgo.name])
+        self.ctx, [self.hash] = compileCuda(myPath, [f'hash'], [hashAlgo.value[0]])
     
     @override
     def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
@@ -74,7 +78,8 @@ class SeqGPU(hashing.StreamingHashEngine):
 
     @override
     def compute(self):
-        return hashing.Digest(self.digest_name, self.digest)
+        dummyDigest = hashing.Digest(self.digest_name, bytes(self.digest_size))
+        return dummyDigest, self.digest
 
     @property
     @override
@@ -180,7 +185,7 @@ class MerkleCPU(hashing.StreamingHashEngine):
     def compute(self) -> collections.OrderedDict:
         digests = {}
         for key, trueHash in self.digests.items():
-            digest = hashing.Digest(self.digest_name, bytes(range(64)))
+            digest = hashing.Digest(self.digest_name, bytes(self.digest_size))
             digests[key] = (digest, trueHash)
         return digests
 
@@ -194,48 +199,27 @@ class MerkleCPU(hashing.StreamingHashEngine):
     def digest_size(self) -> int:
         return self.hasher.digestSize
 
-class MerkleGPU(hashing.StreamingHashEngine):
-    # reduce factor is 1 for normal hashing
-    # for lattice hash we spawn 8 times more threads to handle reduction
-    # because each 64 byte digest can be represented as 8 uint64_t for summation
-    def __init__(self, hashAlgo, topology):
-        self.hashAlgo = hashAlgo
+class HasherGPU(hashing.StreamingHashEngine):
+    def __init__(self, hashAlgo, topology, workflow):
         self.digestSize = hashAlgo.value[1]
         self.digests = {}
+        self.hashAlgo = hashAlgo
         self.topology = topology
+        self.workflow = workflow
         global srcPath
-        myPath = os.path.join(srcPath, 'merkle.cuh')
+        myPath = os.path.join(srcPath, topology.value)
         self.ctx, [self.hashBlock, self.reduce] = compileCuda(
-            myPath, ['hash_block', 'reduce'], [hashAlgo.name, topology.name])
-    
-    def _reduce_tree(self, nDigest, inputBuffer, outputBuffer, stream):
-        inputBuffer = (inputBuffer, np.array([inputBuffer], dtype=np.uint64))
-        outputBuffer = (outputBuffer, np.array([outputBuffer], dtype=np.uint64))
-        while nDigest > 1:
-            nDigest = (nDigest + 1) & ~0b1 # padding to multiple of 2
-            nThread = nDigest // 2 # need half as many threads to compress
-            block = min(512, nThread)
-            grid = (nThread + (block-1)) // block
-            nThread = np.array([nThread], dtype=np.uint64)
-            args = [outputBuffer[1], inputBuffer[1], nThread]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.reduce, grid, 1, 1, block, 1, 1, (block+1)*self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-            nDigest = grid
-            inputBuffer, outputBuffer = outputBuffer, inputBuffer
-        return inputBuffer[0]
-    
+            myPath, ['hashBlock', 'reduce'], [hashAlgo.value[0]], [workflow.name])
+
     @override
     def update(self, data: collections.OrderedDict, blockSize=8192) -> None:
-        if self.topology == Topology.MERKLE_COALESCED: # coalesced
+        if self.workflow == Workflow.COALESCED:
             self.update_coalesced(data, blockSize)
-        elif self.topology == Topology.MERKLE_LAYERED: # separated
+        elif self.workflow == Workflow.LAYERED or self.workflow == Workflow.LAYERED_SORTED:
             self.update_perlayer(data, blockSize)
-        elif self.topology == Topology.MERKLE_INPLACE: # inplace
+        elif self.workflow == Workflow.INPLACE:
             self.update_inplace(data, blockSize)
-    
+
     def update_coalesced(self, data: collections.OrderedDict, blockSize=8192):
         self.digests['all'] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
@@ -246,12 +230,13 @@ class MerkleGPU(hashing.StreamingHashEngine):
         oData = checkCudaErrors(runtime.cudaMalloc((nBlock+1)*self.digestSize))
         iData = (iData, np.array([iData], dtype=np.uint64))
         oData = (oData, np.array([oData], dtype=np.uint64))
+
         i = 0
-        for v in data.values():
-            ptr = v.data_ptr() if hasattr(v, 'data_ptr') else v.data.ptr
-            checkCudaErrors(runtime.cudaMemcpy(iData[0]+i, ptr, v.nbytes,
+        for tensor in data.values():
+            ptr = tensor.data_ptr() if hasattr(tensor, 'data_ptr') else tensor.data.ptr
+            checkCudaErrors(runtime.cudaMemcpy(iData[0]+i, ptr, tensor.nbytes,
                 runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
-            i += v.nbytes
+            i += tensor.nbytes
 
         nThread = nBlock
         block = min(512, nThread)
@@ -267,8 +252,13 @@ class MerkleGPU(hashing.StreamingHashEngine):
             self.hashBlock, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
         ))
 
-        # # merkle tree reduction to single digest
-        finalDigest = self._reduce_tree(nBlock, oData[0], iData[0], stream)
+        # merkle tree reduction to single digest
+        if self.topology == Topology.MERKLE:
+            threadPerReduce = 1
+        elif self.topology == Topology.LATTICE:
+            threadPerReduce = 8
+        finalDigest = _reduce(self.reduce, oData[0], iData[0], nBlock,
+            self.digestSize, threadPerReduce, stream)
         checkCudaErrors(runtime.cudaMemcpyAsync(self.digests['all'], finalDigest,
             self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
 
@@ -279,60 +269,70 @@ class MerkleGPU(hashing.StreamingHashEngine):
 
     def update_perlayer(self, data: collections.OrderedDict, blockSize=8192):
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for i in range(len(data))]
+        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
 
-        # min number of blocks for each layer
-        nBlocks = [(v.nbytes + blockSize - 1) // blockSize for v in data.values()]
-        # pad number of blocks for each layer to multiple of 2
-        nBlocks = [(n + 1) & ~0b1 for n in nBlocks]
-        iData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
-        oData = checkCudaErrors(runtime.cudaMalloc(sum(nBlocks)*self.digestSize))
-        checkCudaErrors(runtime.cudaMemset(iData, 0, sum(nBlocks)*self.digestSize))
-        checkCudaErrors(runtime.cudaMemset(oData, 0, sum(nBlocks)*self.digestSize))
-
-        for layer in data.keys():
-            self.digests[layer] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+        nBlocks = []
+        for layerName, tensor in data.items():
+            self.digests[layerName] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+            nBlock = ((tensor.nbytes + blockSize - 1) // blockSize)
+            # pad number of blocks to multiple of 2
+            nBlocks.append((nBlock + 1) & ~0b1)
         self.digests['all'] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
+        spaceToAlloc = sum(nBlocks)*self.digestSize
+        iData = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
+        oData = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
+        checkCudaErrors(runtime.cudaMemset(iData, 0, spaceToAlloc))
+        checkCudaErrors(runtime.cudaMemset(oData, 0, spaceToAlloc))
+        if self.workflow == Workflow.LAYERED_SORTED:
+            sortedLayer = sorted(data, key=lambda x: data[x].nbytes)
+            data = {k: data[k] for k in sortedLayer}
 
-        blockSize = (blockSize, np.array([blockSize], dtype=np.uint64))
+        blockSize = np.array([blockSize], dtype=np.uint64)
         currBlock = 0
-        for stream, (layer, v), nBlock in zip(streams, data.items(), nBlocks):
-            # hash data blocks to equal number of digests
+        for stream, (layerName, tensor), nBlock in zip(streams, data.items(), nBlocks):
             nThread = nBlock
-            block = min(512, nThread)
-            grid = (nThread + (block-1)) // block
-
-            nBytes = np.array([v.nbytes], dtype=np.uint64)
-            ptr = v.data_ptr() if hasattr(v, 'data_ptr') else v.data.ptr
-            tensor = np.array([ptr], dtype=np.uint64)
+            nBytes = np.array([tensor.nbytes], dtype=np.uint64)
+            ptr = tensor.data_ptr() if hasattr(tensor, 'data_ptr') else tensor.data.ptr
+            tensor_ptr = np.array([ptr], dtype=np.uint64)
             myIn = iData + self.digestSize * currBlock
             myOut = oData + self.digestSize * currBlock
-            args = [np.array([myIn], dtype=np.uint64), tensor, blockSize[1], nBytes]
+            args = [np.array([myIn], dtype=np.uint64), tensor_ptr, blockSize, nBytes]
             args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-
+            block = min(512, nThread)
+            grid = (nThread + (block-1)) // block
             checkCudaErrors(driver.cuLaunchKernel(
-                self.hashBlock, grid, 1, 1, block, 1, 1, 0, stream, args.ctypes.data, 0,
+                self.hashBlock, grid, 1, 1, block, 1, 1, 0, stream,
+                args.ctypes.data, 0,
             ))
 
-            # merkle tree reduction to single digest
-            layerDigest = self._reduce_tree(nBlock, myIn, myOut, stream)
-            checkCudaErrors(runtime.cudaMemcpyAsync(self.digests[layer], layerDigest,
+            if self.topology == Topology.MERKLE:
+                threadPerReduce = 1
+            elif self.topology == Topology.LATTICE:
+                threadPerReduce = 8
+            layerDigest = _reduce(self.reduce, myIn, myOut, nBlock,
+                self.digestSize, threadPerReduce, stream)
+            checkCudaErrors(runtime.cudaMemcpyAsync(self.digests[layerName], layerDigest,
                 self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
             currBlock += nBlock
         
-        for i, (stream, key) in enumerate(zip(streams, data.keys())):
+        for i, (stream, layerName) in enumerate(zip(streams, data.keys())):
             checkCudaErrors(runtime.cudaStreamSynchronize(stream))
             checkCudaErrors(runtime.cudaStreamDestroy(stream))
             inBuff = iData + i * self.digestSize
-            checkCudaErrors(runtime.cudaMemcpy(inBuff, self.digests[key],
+            checkCudaErrors(runtime.cudaMemcpy(inBuff, self.digests[layerName],
                 self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
 
         stream = checkCudaErrors(runtime.cudaStreamCreate())
-        final = self._reduce_tree(len(data), iData, oData, stream)
+        if self.topology == Topology.MERKLE:
+            threadPerReduce = 1
+        elif self.topology == Topology.LATTICE:
+            threadPerReduce = 8
+        finalDigest = _reduce(self.reduce, iData, oData, len(data),
+            self.digestSize, threadPerReduce, stream)
         checkCudaErrors(runtime.cudaStreamSynchronize(stream))
         checkCudaErrors(runtime.cudaStreamDestroy(stream))
 
-        checkCudaErrors(runtime.cudaMemcpy(self.digests['all'], final,
+        checkCudaErrors(runtime.cudaMemcpy(self.digests['all'], finalDigest,
             self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice))
 
         checkCudaErrors(runtime.cudaFree(iData))
@@ -378,9 +378,15 @@ class MerkleGPU(hashing.StreamingHashEngine):
         ))
 
         # merkle tree reduction to single digest
-        finalDigest = self._reduce_tree(nBlock, iData[0], oData[0], stream)
+        if self.topology == Topology.MERKLE:
+            threadPerReduce = 1
+        elif self.topology == Topology.LATTICE:
+            threadPerReduce = 8
+        finalDigest = _reduce(self.reduce, iData[0], oData[0], nBlock,
+            self.digestSize, threadPerReduce, stream)
         checkCudaErrors(runtime.cudaMemcpyAsync(self.digests['all'], finalDigest,
             self.digestSize, runtime.cudaMemcpyKind.cudaMemcpyDeviceToDevice, stream))
+
         checkCudaErrors(runtime.cudaFreeAsync(iData[0], stream))
         checkCudaErrors(runtime.cudaFreeAsync(oData[0], stream))
         checkCudaErrors(runtime.cudaStreamSynchronize(stream))
@@ -393,128 +399,35 @@ class MerkleGPU(hashing.StreamingHashEngine):
     @override
     def compute(self) -> collections.OrderedDict:
         digests = {}
-        for key, trueHash in self.digests.items():
+        for layerName, trueHash in self.digests.items():
             digest = hashing.Digest(self.digest_name, bytes(range(self.digest_size)))
-            digests[key] = (digest, trueHash)
+            digests[layerName] = (digest, trueHash)
         return digests
 
     @property
     @override
     def digest_name(self) -> str:
-        return f'{self.topology.name}-{self.hashAlgo.name}'
+        return f'{self.topology.name}-{self.workflow.name}-{self.hashAlgo.name}'
 
     @property
     @override
     def digest_size(self) -> int:
         return self.digestSize
 
-class LatticeGPU(hashing.StreamingHashEngine):
-    def __init__(self, hashAlgo, isDataset=True):
+class DatasetHasherGPU(hashing.StreamingHashEngine):
+    def __init__(self, hashAlgo, topology):
         self.hashAlgo = hashAlgo
+        self.topology = topology
         self.digestSize = hashAlgo.value[1]
         self.digests = {}
-        self.totalSum = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
 
         global srcPath
-        myPath = os.path.join(srcPath, hashAlgo.value[0])
-        if isDataset:
-            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
-                myPath, ['hash_dataset_ltHash', 'reduce_ltHash'])
-        else:
-            self.ctx, [self.hashBlock, self.reduce] = compileCuda(
-                myPath, ['hash_ltHash', 'reduce_ltHash'])
-            
+        myPath = os.path.join(srcPath, topology.value)
+        self.ctx, [self.hashBlock, self.reduce] = compileCuda(
+            myPath, ['hash_dataset', 'reduce'], [hashAlgo.value[0]])
 
     @override
     def update(self, data: collections.OrderedDict, blockSize) -> None:
-        checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
-        streams = [checkCudaErrors(runtime.cudaStreamCreate()) for _ in range(len(data))]
-
-        blockSizeA = np.array([blockSize], dtype=np.uint64)
-        unsortedLayers = []
-        totalBlocks = 0
-        for k, v in data.items():
-            # register new hash category in dictionary
-            if k not in self.digests:
-                self.digests[k] = checkCudaErrors(runtime.cudaMalloc(self.digestSize))
-            unsortedLayers.append((k, v.data_ptr(), v.nbytes))
-            sortedLayers = sorted(unsortedLayers, key=lambda x: x[2])
-            totalBlocks += (v.nbytes + blockSize - 1) // blockSize
-        
-        spaceToAlloc = totalBlocks * self.digestSize
-        if self.allocatedSpace < spaceToAlloc:
-            checkCudaErrors(runtime.cudaFree(self.iDataFull))
-            checkCudaErrors(runtime.cudaFree(self.oDataFull))
-            self.iDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
-            self.oDataFull = checkCudaErrors(runtime.cudaMalloc(spaceToAlloc))
-            self.allocatedSpace = spaceToAlloc
-        outputStored = [True] * len(data.values()) # True: iData, False: oData
-        currBytes = 0
-
-        for i, (stream, (_, value, size)) in enumerate(zip(streams, sortedLayers)):
-            sizeA = np.array([size], dtype=np.uint64)
-            nBlock = (size + (blockSize-1)) // blockSize
-            tensor = np.array([value], dtype=np.uint64)
-            iData = np.array([self.iDataFull + currBytes], dtype=np.uint64)
-            oData = np.array([self.oDataFull + currBytes], dtype=np.uint64)
-
-            args = [oData, tensor, blockSizeA, sizeA]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            nThread = nBlock
-            block = min(512, nThread)
-            grid = (nThread + block - 1) // block
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.hashBlock, grid, 1, 1, block, 1, 1, 0, stream,
-                args.ctypes.data, 0,
-            ))
-            outputStored[i] = not outputStored[i]
-
-            while nBlock > 1:
-                iData, oData = oData, iData
-                nBlock = ((nBlock + 1) & ~0b1)
-                nThread = (nBlock // 2) * 8
-                block = min(512, nThread)
-                grid = (nThread + (block-1)) // block
-                args = [oData, iData]
-                args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-
-                checkCudaErrors(driver.cuLaunchKernel(
-                    self.reduce, grid, 1, 1, block, 1, 1, block * self.digestSize,
-                    stream, args.ctypes.data, 0,
-                ))
-                checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-                nBlock = grid
-                outputStored[i] = not outputStored[i]
-            currBytes += nBlock * self.digestSize
-        
-        currBytes = 0
-        for i, (stream, (key, _, size)) in enumerate(zip(streams, sortedLayers)):
-            checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-            base = self.iDataFull if outputStored[i] else self.oDataFull
-            layerDigest = np.array([base + currBytes], dtype=np.uint64)
-
-            # add layer hash to layer sum
-            args = [np.array([self.digests[key]], dtype=np.uint64), layerDigest]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-
-            # add layer hash to total sum
-            args = [np.array([self.totalSum], dtype=np.uint64), layerDigest]
-            args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
-            checkCudaErrors(driver.cuLaunchKernel(
-                self.reduce, 1, 1, 1, 8, 1, 1, self.digestSize,
-                stream, args.ctypes.data, 0,
-            ))
-
-            checkCudaErrors(runtime.cudaStreamSynchronize(stream))
-            checkCudaErrors(runtime.cudaStreamDestroy(stream))
-            nBlock = (size + (blockSize-1)) // blockSize
-            currBytes += nBlock * self.digestSize
-    
-    def update_dataset(self, data: collections.OrderedDict, blockSize) -> None:
         checkCudaErrors(driver.cuCtxSetCurrent(self.ctx))
         blockSizeA = np.array([blockSize], dtype=np.uint64)
         iData = []
@@ -583,21 +496,21 @@ class LatticeGPU(hashing.StreamingHashEngine):
     def compute(self) -> collections.OrderedDict:
         digests = {}
         for identity, trueHash in self.digests.items():
-            digest = hashing.Digest(self.digest_name, bytes(range(self.digestSize)))
+            digest = hashing.Digest(self.digest_name, bytes(range(self.digest_size)))
             digests[identity] = (digest, trueHash)
         return digests
 
     @property
     @override
     def digest_name(self) -> str:
-        return f'{Topology.LATTICE.name}-{self.hashAlgo.name}'
+        return f'{self.topology.name}-{Workflow.LAYERED.name}-{self.hashAlgo.name}'
 
     @property
     @override
     def digest_size(self) -> int:
         return self.digestSize
 
-def get_model_hasher(hashAlgo: HashAlgo, topology: Topology, device: str):
+def get_model_hasher(hashAlgo: HashAlgo, topology: Topology, workflow: Workflow, device: str):
     hasher = None
     if device == 'cpu':
         if topology >= Topology.MERKLE_LAYERED and topology <= Topology.MERKLE_INPLACE:
@@ -605,13 +518,35 @@ def get_model_hasher(hashAlgo: HashAlgo, topology: Topology, device: str):
     elif device == 'gpu':
         if topology == Topology.SERIAL:
             hasher = SeqGPU(hashAlgo)
-        elif topology >= Topology.MERKLE_COALESCED and topology <= Topology.MERKLE_INPLACE:
-            hasher = MerkleGPU(hashAlgo, topology)
-        elif topology == Topology.LATTICE:
-            hasher = LatticeGPU(hashAlgo, False)
+        else:
+            hasher = HasherGPU(hashAlgo, topology, workflow)
 
     if not hasher:
         raise NotImplementedError(f'Unsupported for {hashAlgo.name}, \
-            {topology.name}, {device}')
+            {topology.name}, {workflow.name}, {device}')
 
     return hasher
+
+# utility functions
+
+def _reduce(reduceKernel, iData, oData, nDigest, digestSize, threadPerReduce, stream):
+    iData = (iData, np.array([iData], dtype=np.uint64))
+    oData = (oData, np.array([oData], dtype=np.uint64))
+    while nDigest > 1:
+        # padding to multiple of 2
+        nDigest = (nDigest + 1) & ~0b1
+        nThread = (nDigest // 2) * threadPerReduce
+        block = min(512, nThread)
+        grid = (nThread + (block-1)) // block
+        nThread = np.array([nThread], dtype=np.uint64)
+        args = [oData[1], iData[1], nThread]
+        args = np.array([arg.ctypes.data for arg in args], dtype=np.uint64)
+
+        checkCudaErrors(driver.cuLaunchKernel(
+            reduceKernel, grid, 1, 1, block, 1, 1, (block+1)*digestSize,
+            stream, args.ctypes.data, 0,
+        ))
+        nDigest = grid
+        iData, oData = oData, iData
+
+    return iData[0]

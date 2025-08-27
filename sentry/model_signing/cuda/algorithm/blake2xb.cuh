@@ -24,6 +24,7 @@
 #define BLAKE2B_KEYBYTES_MIN 16U
 #define BLAKE2B_KEYBYTES_MAX 64U
 
+#define OUT_BYTES 64UL
 #define BLAKE2B_BYTES_MIN 16U
 #define BLAKE2B_BYTES_MAX 64U
 
@@ -65,15 +66,15 @@ void initStateFromParams(BLAKE2XB_CTX *ctx, uint8_t *key, uint64_t key_nBytes) {
 }
 
 __device__
-void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint64_t outputLength,
-    uint8_t *salt = nullptr, uint8_t *personalization = nullptr) {
+void cuda_blake2xb_init(BLAKE2XB_CTX *ctx, uint8_t *salt = nullptr,
+    uint8_t *personalization = nullptr) {
     
     const uint64_t key = 0xFEDCBA9876543210UL;
     const uint64_t keylen = sizeof(key);
     memset(ctx, 0, sizeof(ctx));
     ctx->fanout = 1;
     ctx->depth = 1;
-    ctx->xofLength = (uint32_t)outputLength;
+    ctx->xofLength = (uint32_t)OUT_BYTES;
     if (salt)
         memcpy(ctx->salt, salt, sizeof(ctx->salt));
     if (personalization)

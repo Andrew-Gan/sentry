@@ -1,31 +1,20 @@
-#if defined(SHA256)
-    #include "../algorithm/sha256.cuh"
-#elif defined(BLAKE2B)
-    #include "../algorithm/blake2b.cuh"
-#elif defined(SHA3)
-    #include "../algorithm/sha3.cuh"
-#endif
-
-#define OUT_BYTES 32UL
-
-#if defined(MERKLE_COALESCED) || defined(MERKLE_LAYERED)
+#if defined(COALESCED) || defined(LAYERED)
 extern "C" __global__
-void hash_block(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nbytes) {
+void hashBlock(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nbytes) {
     CTX ctx;
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
     uint8_t *myIn = in + idx * blockSize;
+    if (myIn >= in + nbytes) return;
     uint64_t rem = (in + nbytes) - myIn;
-    if (myIn < in + nbytes) {
-        init(&ctx);
-        update(&ctx, myIn, rem < blockSize ? rem : blockSize);
-        final(&ctx, &out[idx * OUT_BYTES]);
-    }
+
+    init(&ctx);
+    update(&ctx, myIn, rem < blockSize ? rem : blockSize);
+    final(&ctx, &out[idx * OUT_BYTES]);
 }
 
-#elif defined(MERKLE_INPLACE)
-
+#elif defined(INPLACE)
 extern "C" __global__
-void hash_block(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
+void hashBlock(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
     uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t nThread) {
     CTX ctx;
     uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -54,8 +43,8 @@ void reduce(uint8_t *out, uint8_t *in, uint64_t n) {
     int glbIdx = blockIdx.x * blockDim.x + threadIdx.x;
     int locIdx = threadIdx.x;
     int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x));
-    if (locIdx == 0)
-        memset(&shMem[(blockDim.x)*OUT_BYTES], 0, OUT_BYTES);
+    if (activeThreads % 2 == 1 && locIdx == 0)
+        memset(&shMem[activeThreads*OUT_BYTES], 0, OUT_BYTES);
     if (locIdx < activeThreads) {
         init(&ctx);
         update(&ctx, &in[(2*glbIdx)*OUT_BYTES], OUT_BYTES);
@@ -78,6 +67,6 @@ void reduce(uint8_t *out, uint8_t *in, uint64_t n) {
         }
     }
     if (locIdx == 0) {
-        memcpy(out + blockIdx.x*OUT_BYTES, shMem, OUT_BYTES);
+        memcpy(out + blockIdx.x * OUT_BYTES, shMem, OUT_BYTES);
     }
 }

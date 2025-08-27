@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-
-#include "../algorithm/blake2xb.cuh"
-
 __device__
 void add(const uint64_t b1, const uint64_t b2, uint64_t *out) {
     // When bitsPerElem is 16:
@@ -64,58 +61,92 @@ size_t getChecksumSizeBytes(uint64_t N, uint64_t B) {
     return (N / elemsPerUint64) * sizeof(uint64_t);
 }
 
+#if defined(COALESCED) || defined(LAYERED) || defined(LAYERED_SORTED)
 extern "C" __global__ 
-void hash_ltHash(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t size) {
-    uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
-    uint8_t *myIn = in + i * blockSize;
-    if (myIn >= in + size) return;
-	uint8_t *myEnd = myIn + blockSize;
-
+void hashBlock(uint8_t *out, uint8_t *in, uint64_t blockSize, uint64_t nbytes) {
     BLAKE2XB_CTX ctx;
-    cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX);
-    cuda_blake2xb_update(&ctx, myIn, blockSize < myEnd - myIn ? blockSize : myEnd - myIn);
-    cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
+    uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    uint8_t *myIn = in + idx * blockSize;
+    if (myIn >= in + nbytes) return;
+    uint64_t rem = (in + nbytes) - myIn;
+
+    cuda_blake2xb_init(&ctx);
+    cuda_blake2xb_update(&ctx, myIn, rem < blockSize ? rem : blockSize);
+    cuda_blake2xb_final(&ctx, &out[idx * OUT_BYTES]);
 }
 
+#elif defined(INPLACE)
+extern "C" __global__
+void hashBlock(uint8_t *out, uint64_t blockSize, uint64_t *startThread,
+    uint64_t *workSize, uint8_t **workAddr, uint64_t l, uint64_t nThread) {
+    BLAKE2XB_CTX ctx;
+    uint64_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < nThread) {
+        cuda_blake2xb_init(&ctx);
+        uint64_t workId = 0;
+        while (workId < l && idx >= startThread[workId]) {
+            workId++;
+        }
+        workId--;
+        uint8_t *my_in = workAddr[workId] + blockSize * (idx - startThread[workId]);
+        uint8_t *workEnd = workAddr[workId] + workSize[workId];
+        cuda_blake2xb_update(&ctx, my_in, blockSize < workEnd - my_in ? blockSize : workEnd - my_in);
+    }
+    __syncthreads();
+    if (idx < nThread)
+        cuda_blake2xb_final(&ctx, &out[idx * OUT_BYTES]);
+}
+
+#endif
+
 extern "C" __global__ 
-void hash_dataset_ltHash(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_t n) {
+void hash_dataset(uint8_t *out, uint8_t **in, uint64_t blockSize, uint64_t n) {
     uint64_t i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i >= n) return;
     BLAKE2XB_CTX ctx;
-    cuda_blake2xb_init(&ctx, BLAKE2B_BYTES_MAX);
+    cuda_blake2xb_init(&ctx);
     cuda_blake2xb_update(&ctx, (uint8_t*)&i, sizeof(i));
     cuda_blake2xb_update(&ctx, in[i], blockSize);
     cuda_blake2xb_final(&ctx, out + i * BLAKE2B_BYTES_MAX);
 }
 
 extern "C" __global__
-void reduce_ltHash(uint64_t *out, uint64_t *in, uint64_t n) {
-    extern __shared__ uint64_t sdata[];
-    uint64_t tid = threadIdx.x;
-    uint64_t digestId = (2 * blockDim.x * blockIdx.x) + tid;
-    uint64_t *lhs = in + digestId;
-    uint64_t *rhs = in + digestId + blockDim.x;
+void reduce(uint64_t *out, uint64_t *in, uint64_t n) {
+    extern __shared__ uint64_t shMem[];
+    uint64_t locIdx = threadIdx.x;
+    int activeThreads = min((uint64_t)blockDim.x, n - (blockIdx.x * blockDim.x));
+    uint64_t numDigest = 2 * (activeThreads / 8);
 
-    if (blockIdx.x * blockDim.x + threadIdx.x >= n)
-        return;
-
-    add(*lhs, *rhs, sdata+tid);
-
-    uint64_t numThread = blockDim.x / 2;
-    for (; numThread > 32; numThread /= 2) {
-        if (tid < numThread) {
-            add(sdata[tid], sdata[tid + numThread], sdata + tid);
-        }
+    if (locIdx < activeThreads) {
+        uint64_t offset = (2 * blockDim.x * blockIdx.x) + locIdx;
+        add(in[offset], in[offset+activeThreads], shMem+locIdx);
+    }
+    numDigest /= 2;
+    __syncthreads();
+    if (numDigest > 1) {
+        // if odd number of digests at start, pad one zero digest
+        if (numDigest % 2 == 1 && locIdx < 8)
+            shMem[8*numDigest+locIdx] = 0;
+        numDigest = (numDigest + 1) & ~0b1;
         __syncthreads();
     }
-    for (; numThread >= 8; numThread /= 2) {
-        if (tid < numThread)
-            add(sdata[tid], sdata[tid + numThread], sdata + tid);
+    while (numDigest > 8) {
+        activeThreads = numDigest / 2 * 8;
+        if (locIdx < activeThreads)
+            add(shMem[locIdx], shMem[locIdx + activeThreads], shMem + locIdx);
+        if (numDigest > 1) numDigest = (numDigest / 2 + 1) & ~0b1;
+        __syncthreads();
     }
-    uint64_t U64PerHash = BLAKE2B_BYTES_MAX / sizeof(*out);
-    if (tid < U64PerHash) {
-        uint64_t blockOffsetU64 = blockIdx.x * U64PerHash;
-        *(out + blockOffsetU64 + tid) = sdata[tid];
+    while (numDigest > 1) {
+        activeThreads = numDigest / 2 * 8;
+        if (locIdx < activeThreads)
+            add(shMem[locIdx], shMem[locIdx + activeThreads], shMem + locIdx);
+        numDigest /= 2;
+        if (numDigest > 1) numDigest = (numDigest + 1) & ~0b1;
+    }
+    if (locIdx < 8) {
+        uint64_t blockOffsetU64 = 8 * blockIdx.x;
+        *(out + blockOffsetU64 + locIdx) = shMem[locIdx];
     }
 }
 

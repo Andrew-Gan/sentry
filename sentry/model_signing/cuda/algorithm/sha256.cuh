@@ -14,6 +14,8 @@
 
 /**************************** DATA TYPES ****************************/
 
+#define OUT_BYTES 32UL
+
 #include <cuda/std/cstdint>
 
 typedef struct {
@@ -120,7 +122,7 @@ __device__ void update(SHA256_CTX *ctx, uint8_t *data, uint64_t len)
 	}
 }
 
-__device__ void final(SHA256_CTX *ctx, uint8_t hash[])
+__device__ void final(SHA256_CTX *ctx, uint8_t *out)
 {
 	uint32_t i;
 
@@ -155,14 +157,14 @@ __device__ void final(SHA256_CTX *ctx, uint8_t hash[])
 	// Since this implementation uses little endian byte ordering and SHA uses big endian,
 	// reverse all the bytes when copying the final state to the out hash.
 	for (i = 0; i < 4; ++i) {
-		hash[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
-		hash[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
+		out[i]      = (ctx->state[0] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 4]  = (ctx->state[1] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 8]  = (ctx->state[2] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 12] = (ctx->state[3] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 16] = (ctx->state[4] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 20] = (ctx->state[5] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 24] = (ctx->state[6] >> (24 - i * 8)) & 0x000000ff;
+		out[i + 28] = (ctx->state[7] >> (24 - i * 8)) & 0x000000ff;
 	}
 }
 

@@ -2,6 +2,7 @@ import pathlib
 from common import get_model, get_image_dataloader
 import sentry
 from huggingface_hub import login
+from sentry.model_signing.hashing.topology import *
 
 if __name__ == '__main__':
     with open('hf_access_token', 'r') as f:
@@ -19,10 +20,9 @@ if __name__ == '__main__':
     for data in dataloader:
         x, y = data[0]['data'], data[0]['label']
         # pred = model(x)
-    print('[Trainer] Model training complete')
 
     sentry.sign_dataset(hasher.compute())
-    print('[Trainer] Data set signing complete')
+    print('[Trainer] Dataset signing complete')
 
     sentry.sign_model(model)
     print('[Trainer] Model signing complete')

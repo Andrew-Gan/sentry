@@ -32,7 +32,7 @@ PayloadGeneratorFunc: TypeAlias = Callable[
     [manifest.Manifest], signing.SigningPayload
 ]
 
-def build_serializer(item, hashAlgo: HashAlgo, topology: Topology):
+def build_serializer(item, hashAlgo: HashAlgo, topology: Topology, workflow: Workflow):
     if isinstance(item, pathlib.Path):
         def hasher_factory(item) -> hashing.HashEngine:
             return file.SimpleFileHasher(
@@ -42,7 +42,7 @@ def build_serializer(item, hashAlgo: HashAlgo, topology: Topology):
 
     elif isinstance(item, torch.nn.Module):
         device = 'gpu' if next(item.parameters()).is_cuda else 'cpu'
-        hasher = get_model_hasher(hashAlgo, topology, device)
+        hasher = get_model_hasher(hashAlgo, topology, workflow, device)
         def hasher_factory(item) -> hashing.HashEngine:
             return state.SimpleStateHasher(state=item, content_hasher=hasher)
         serializer = serialize_by_state.ManifestSerializer(
@@ -60,6 +60,7 @@ def sign(
     payload_generator: PayloadGeneratorFunc,
     hashAlgo: HashAlgo,
     topology: Topology,
+    workflow: Workflow,
     ignore_paths: Iterable[pathlib.Path] = frozenset(),
 ) -> Iterable[signing.Signature]:
     """Provides a wrapper function for the steps necessary to sign a model.
@@ -79,7 +80,7 @@ def sign(
     if isinstance(item, dict):
         stmnts = []
         hashes = []
-        serializer = build_serializer(item, hashAlgo, topology)
+        serializer = build_serializer(item, None, None, None)
         for identity, (digest, trueHash) in item.items():
             manifestItem = manifest.StateManifestItem(
                 state=identity, digest=digest)
@@ -87,7 +88,7 @@ def sign(
             stmnts.append(payload_generator(manif))
             hashes.append([trueHash])
     else:
-        serializer = build_serializer(item, hashAlgo, topology)
+        serializer = build_serializer(item, hashAlgo, topology, workflow)
         if isinstance(item, torch.nn.Module):
             item = item.state_dict()
         manif = serializer.serialize(item, ignore_paths=ignore_paths)
@@ -119,8 +120,8 @@ def verify(
 
     peer_manifests, algo = verifier.verify(sigs)
     # figure out hashing algorithm from signature
-    topology, hashAlgo = algo.split('-')
-    serializer = build_serializer(item, HashAlgo[hashAlgo], Topology[topology])
+    topology, workflow, hashAlgo = algo.split('-')
+    serializer = build_serializer(item, HashAlgo[hashAlgo], Topology[topology], Workflow[workflow])
 
     local_manifests = []
 

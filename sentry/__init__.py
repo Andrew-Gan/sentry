@@ -18,11 +18,15 @@ log = logging.getLogger(__name__)
 # torch.nn.Module   |   model       |   loaded into torch   |   cpu or gpu
 # dict              |   dataset     |   per-sample digests  |   gpu
 
-def precompile():
-    # future: pre-compile all cuda modules and store somewhere
-    raise NotImplementedError('precompile not implemented')
+def sign_model(item: str | torch.nn.Module, hashAlgo=HashAlgo.SHA256,
+    topology=Topology.MERKLE, workflow=Workflow.INPLACE, sig_filename='model.sig'):
 
-def sign_model(item: str | torch.nn.Module, hashAlgo=HashAlgo.SHA256, topology=Topology.MERKLE_INPLACE):
+    # check validity of configuration
+    if topology == Topology.LATTICE and hashAlgo != HashAlgo.BLAKE2XB:
+        raise RuntimeError('LATTICE only supported with BLAKE2XB')
+    if workflow == Workflow.LAYERED_SORTED and topology != Topology.LATTICE:
+        raise RuntimeError('LAYERED_SORTED only supported with Topology.LATTICE')
+
     args = sign._arguments()
     if isinstance(item, str):
         signer = sign._get_payload_signer(args, 'cpu')
@@ -34,22 +38,23 @@ def sign_model(item: str | torch.nn.Module, hashAlgo=HashAlgo.SHA256, topology=T
         raise TypeError('item is neither str nor torch module')
 
     payload_generator = in_toto.DigestsIntotoPayload.from_manifest
-    sig = model.sign(item, signer, payload_generator, hashAlgo, topology, ignore_paths=[args.sig_out])[0]
-    sig.write(args.sig_out / pathlib.Path('model.sig'))
+    sig = model.sign(item, signer, payload_generator, hashAlgo, topology,
+        workflow, ignore_paths=[args.sig_out])[0]
+    sig.write(args.sig_out / pathlib.Path(sig_filename))
 
 
-def sign_dataset(item: dict, hashAlgo=HashAlgo.BLAKE2XB, topology=Topology.LATTICE):
+def sign_dataset(item: dict):
     args = sign._arguments()
     signer = sign._get_payload_signer(args, 'gpu', len(item))
     payload_generator = in_toto.DigestsIntotoPayload.from_manifest
-    sigs = model.sign(item, signer, payload_generator, hashAlgo, topology)
+    sigs = model.sign(item, signer, payload_generator, None, None, None)
     for src, sig in zip(item.keys(), sigs):
         sig.write(args.sig_out / pathlib.Path(f'dataset_{src}.sig'))
 
 
-def verify_model(item: str | torch.nn.Module):
+def verify_model(item: str | torch.nn.Module, sig_filename='model.sig'):
     args = verify._arguments()
-    args.sig_path = args.sig_path / pathlib.Path('model.sig')
+    args.sig_path = args.sig_path / pathlib.Path(sig_filename)
     sig = verify._get_signature(args)
     if isinstance(item, str):
         verifier = verify._get_verifier(args, 'cpu')

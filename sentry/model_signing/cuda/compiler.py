@@ -1,4 +1,4 @@
-from cuda.bindings import driver, nvrtc
+from cuda.bindings import driver, nvrtc, runtime
 import numpy as np
 import os
 
@@ -7,7 +7,11 @@ def _cudaGetErrorEnum(error):
         err, name = driver.cuGetErrorName(error)
         return name if err == driver.CUresult.CUDA_SUCCESS else "<unknown>"
     elif isinstance(error, nvrtc.nvrtcResult):
-        return nvrtc.nvrtcGetErrorString(error)[1]
+        err, name = nvrtc.nvrtcGetErrorString(error)
+        return name if err == nvrtc.nvrtcResult.NVRTC_SUCCESS else "<unknown>"
+    elif isinstance(error, runtime.cudaError_t):
+        err, name = runtime.cudaGetErrorName(error)
+        return name if err == runtime.cudaError_t.cudaSuccess else "<unknown>"
     else:
         raise RuntimeError('Unknown error type: {}'.format(error))
 
@@ -24,7 +28,7 @@ def checkCudaErrors(result):
         return result[1:]
     
 
-def compileCuda(srcPath: str, function_names: list[str], flags=[]):
+def compileCuda(srcPath: str, function_names: list[str], includeFiles=[], defines=[]):
     cuDevice = checkCudaErrors(driver.cuDeviceGet(0))
     ctx = checkCudaErrors(driver.cuCtxGetCurrent())
     if repr(ctx) == '<CUcontext 0x0>':
@@ -44,8 +48,10 @@ def compileCuda(srcPath: str, function_names: list[str], flags=[]):
             b'-I' + inclPath.encode(),
             b'-I/usr/local/cuda/include',
         ]
-    for flag in flags:
-        opts.append(bytes(f'-D{flag}', 'ascii'))
+    for includeFile in includeFiles:
+        opts.append(bytes(f'--pre-include={includeFile}', 'ascii'))
+    for define in defines:
+        opts.append(bytes(f'-D{define}', 'ascii'))
 
     with open(srcPath, 'r') as f:
         code = f.read()
