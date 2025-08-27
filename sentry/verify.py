@@ -95,7 +95,7 @@ def _get_verifier(args: argparse.Namespace, device='gpu', num_sigs=1) -> signing
     if args.method == "private-key":
         _check_private_key_flags(args)
         # use layered to hash multiple identity statements in parallel on GPU
-        verifierHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
+        verifierHasher = HasherGPU(HashAlgo.SHA256, Topology.MERKLE, Workflow.LAYERED) if device=='gpu' else None
         verifier = key.ECKeyVerifier.from_path(args.key, device, num_sigs, verifierHasher)
         return in_toto_signature.IntotoVerifier(verifier)
     elif args.method == "pki":

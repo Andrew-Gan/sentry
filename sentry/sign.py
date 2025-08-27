@@ -120,7 +120,7 @@ def _get_payload_signer(args: argparse.Namespace, device='gpu', num_sigs=1) -> s
     if args.method == "private-key":
         _check_private_key_options(args)
         # use layered to hash multiple identity statements in parallel on GPU
-        signerHasher = MerkleGPU(HashAlgo.SHA256, Topology.MERKLE_LAYERED) if device=='gpu' else None
+        signerHasher = HasherGPU(HashAlgo.SHA256, Topology.MERKLE, Workflow.LAYERED) if device=='gpu' else None
         payload_signer = key.ECKeySigner.from_path(
             key_path=args.key_path,
             device=device,

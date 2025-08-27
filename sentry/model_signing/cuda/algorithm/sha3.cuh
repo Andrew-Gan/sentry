@@ -9,6 +9,7 @@
 
 #include <cuda/std/cstdint>
 
+#define OUT_BYTES 64UL
 #define KECCAK_ROUND 24
 #define KECCAK_STATE_SIZE 25
 #define KECCAK_Q_SIZE 192
