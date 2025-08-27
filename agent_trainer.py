@@ -6,6 +6,7 @@ from sentry.model_signing.hashing.topology import *
 
 import time
 from cuda.bindings import driver
+from sentry.model_signing.hashing.topology import Topology, HashAlgo
 
 if __name__ == '__main__':
     with open('hf_access_token', 'r') as f:
@@ -38,3 +39,20 @@ if __name__ == '__main__':
 
     sentry.sign_model(model)
     print('[Trainer] Model signing complete')
+
+    # dataloader, hasher = get_image_dataloader(
+    #     path=pathlib.Path('dataset/cifar10'),
+    #     batch=128,
+    #     device='gpu',
+    #     gds=False,
+    # )
+
+    # start = time.perf_counter()
+    # for data in dataloader:
+    #     x, y = data[0]['data'], data[0]['label']
+    #     pred = model(x)
+    # end = time.perf_counter()
+    # print(f'[Trainer] Model training complete: {1000*(end-start):.2f} ms')
+
+    # sentry.sign_dataset(hasher.compute())
+    # print('[Trainer] Data set signing complete')
