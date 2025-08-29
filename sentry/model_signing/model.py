@@ -91,14 +91,14 @@ def sign(
             hashes.append([trueHash])
     else:
         serializer = build_serializer(item, hashAlgo, topology, workflow)
+        start = time.perf_counter()
         if isinstance(item, torch.nn.Module):
             item = item.state_dict()
-        start = time.perf_counter()
         manif = serializer.serialize(item, ignore_paths=ignore_paths)
-        end = time.perf_counter()
-        print(f'[Trainer] Model hashing runtime: {1000*(end-start):.2f} ms')
         stmnts = [payload_generator(manif)]
         hashes = [serializer.trueHashes if hasattr(serializer, 'trueHashes') else None]
+        end = time.perf_counter()
+        print(f'[Trainer] Model hashing runtime: {1000*(end-start):.2f} ms')
     return signer.sign(stmnts, hashes)
 
 
@@ -141,12 +141,12 @@ def verify(
             item = item.state_dict()
         start = time.perf_counter()
         manifestItem = serializer.serialize(item, ignore_paths=ignore_paths)
-        end = time.perf_counter()
-        print(f'[Inferencer] Model hashing runtime: {1000*(end-start):.2f} ms')
         if hasattr(serializer, 'trueHashes'):
             for digest, trueHash in zip(manifestItem._item_to_digest.values(), serializer.trueHashes):
                 checkCudaErrors(driver.cuMemcpyDtoH(digest.digest_value, trueHash, digest.digest_size))
         local_manifests.append(manifestItem)
+        end = time.perf_counter()
+        print(f'[Inferencer] Model hashing runtime: {1000*(end-start):.2f} ms')
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:
