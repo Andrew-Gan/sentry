@@ -150,4 +150,8 @@ def verify(
 
     for peer, local in zip(peer_manifests, local_manifests):
         if peer != local:
-            raise verifying.VerificationError(f'the manifests do not match')
+            raise verifying.VerificationError('the manifests do not match:\
+                Note that this is normal for large models with uninitialized\
+                layers, as weights may differ after each loading. It is up to\
+                the model trainer and inferencer to indicate which layers to\
+                ignore during hashing.')

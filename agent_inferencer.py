@@ -21,8 +21,8 @@ if __name__ == '__main__':
                         continue
                     if workflow == Workflow.LAYERED_SORTED and topology != Topology.LATTICE:
                         continue
-                    filename = f'{topology.name}-{workflow.name}-{hashAlgo.name}.sig'
-                    print(filename)
+                    filename = f'{modelName}-{topology.name}-{workflow.name}-{hashAlgo.name}.sig'
+                    print(filename, flush=True)
                     sentry.verify_model(model, filename)
     print('[Inferencer] Model verification complete')
 
