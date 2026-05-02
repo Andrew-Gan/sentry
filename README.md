@@ -1,7 +1,6 @@
 # Sentry
 
-An end-to-end GPU framework for authenticating machine learning artifacts.
-
+This is a repository for the paper "[Sentry: Authenticating Machine Learning Artifacts on the Fly](https://dl.acm.org/doi/10.1145/3719027.3765070)", accepted by ACM CCS 2025.
 
 
 ![](sentry.png "Sentry")
