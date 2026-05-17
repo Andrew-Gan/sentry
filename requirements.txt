@@ -9,7 +9,7 @@ huggingface_hub
 transformers
 sentencepiece
 sacremoses
-cuda-python==12.9.0
+cuda-python==13.0.1
 torch
 pillow
 cupy-cuda12x
